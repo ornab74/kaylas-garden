@@ -35,7 +35,7 @@ function PlantHeader({
       <div className="flex items-start gap-4">
         {plant.thumbnailImage ? (
           <img
-            src={`/uploads/${plant.thumbnailImage}`}
+            src={`/api/uploads/${plant.thumbnailImage}`}
             alt={plant.name}
             className="h-28 w-28 rounded-lg border border-border object-cover"
           />
@@ -496,14 +496,14 @@ function TimelineEntry({ entry }: { entry: PlantEntry }) {
                 key={img.id}
                 onClick={() =>
                   setLightboxImg({
-                    src: `/uploads/${img.filename}`,
+                    src: `/api/uploads/${img.filename}`,
                     alt: img.caption || entry.note,
                   })
                 }
                 className="overflow-hidden rounded-lg border border-border"
               >
                 <img
-                  src={`/uploads/${img.filename}`}
+                  src={`/api/uploads/${img.filename}`}
                   alt={img.caption || "Entry photo"}
                   className="h-20 w-20 object-cover transition-transform hover:scale-105"
                 />

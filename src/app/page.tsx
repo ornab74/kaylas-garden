@@ -28,7 +28,7 @@ function PlantCard({ plant }: { readonly plant: Plant }) {
       <div className="relative flex h-48 items-center justify-center bg-hover">
         {plant.thumbnailImage ? (
           <Image
-            src={`/uploads/${plant.thumbnailImage}`}
+            src={`/api/uploads/${plant.thumbnailImage}`}
             alt={plant.name}
             fill
             className="object-cover"

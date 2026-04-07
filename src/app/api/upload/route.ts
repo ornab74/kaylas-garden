@@ -3,7 +3,15 @@ import { writeFile, mkdir } from "fs/promises";
 import { join, extname } from "path";
 import { randomUUID } from "crypto";
 
-const UPLOADS_DIR = join(process.cwd(), "public", "uploads");
+const UPLOADS_DIR = join(process.cwd(), "data", "uploads");
+
+const ALLOWED_TYPES = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/gif",
+  "image/webp",
+]);
+const MAX_SIZE = 10 * 1024 * 1024; // 10 MB
 
 export async function POST(request: Request): Promise<NextResponse> {
   try {
@@ -13,6 +21,20 @@ export async function POST(request: Request): Promise<NextResponse> {
     if (!file || !(file instanceof Blob)) {
       return NextResponse.json(
         { error: "No file provided" },
+        { status: 400 }
+      );
+    }
+
+    if (!ALLOWED_TYPES.has(file.type)) {
+      return NextResponse.json(
+        { error: "File type not allowed. Accepted: JPEG, PNG, GIF, WebP" },
+        { status: 400 }
+      );
+    }
+
+    if (file.size > MAX_SIZE) {
+      return NextResponse.json(
+        { error: "File too large. Maximum size is 10 MB" },
         { status: 400 }
       );
     }
