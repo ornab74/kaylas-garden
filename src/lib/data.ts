@@ -1,7 +1,7 @@
 import { readFile, writeFile, mkdir } from "fs/promises";
 import { join } from "path";
 import { randomUUID } from "crypto";
-import type { Plant, PlantEntry, UserSettings } from "./types";
+import type { Plant, PlantEntry, UserSettings, WateringEvent } from "./types";
 
 const DATA_DIR = join(process.cwd(), "data");
 const PLANTS_FILE = join(DATA_DIR, "plants.json");
@@ -43,7 +43,7 @@ export async function getPlant(id: string): Promise<Plant | undefined> {
 }
 
 export async function createPlant(
-  plant: Omit<Plant, "id" | "dateAdded" | "entries">
+  plant: Omit<Plant, "id" | "dateAdded" | "entries" | "wateringHistory">
 ): Promise<Plant> {
   const plants = await getPlants();
   const newPlant: Plant = {
@@ -51,6 +51,8 @@ export async function createPlant(
     id: randomUUID(),
     dateAdded: new Date().toISOString(),
     entries: [],
+    wateringIntervalDays: plant.wateringIntervalDays ?? 3,
+    wateringHistory: [],
   };
   plants.push(newPlant);
   await writeJsonFile(PLANTS_FILE, plants);
@@ -94,6 +96,26 @@ export async function addPlantEntry(
   plant.entries.push(newEntry);
   await writeJsonFile(PLANTS_FILE, plants);
   return newEntry;
+}
+
+// --- Watering ---
+
+export async function waterPlant(
+  plantId: string,
+  event: Omit<WateringEvent, "id">
+): Promise<WateringEvent> {
+  const plants = await getPlants();
+  const plant = plants.find((p) => p.id === plantId);
+  if (!plant) {
+    throw new Error(`Plant with id "${plantId}" not found`);
+  }
+  const newEvent: WateringEvent = { ...event, id: randomUUID() };
+  if (!plant.wateringHistory) {
+    plant.wateringHistory = [];
+  }
+  plant.wateringHistory.push(newEvent);
+  await writeJsonFile(PLANTS_FILE, plants);
+  return newEvent;
 }
 
 // --- Settings ---

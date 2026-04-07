@@ -22,6 +22,12 @@ export interface PlantCareInfo {
   generalNotes: string;
 }
 
+export interface WateringEvent {
+  id: string;
+  date: string; // ISO date
+  note: string;
+}
+
 export interface Plant {
   id: string;
   name: string;
@@ -30,6 +36,8 @@ export interface Plant {
   thumbnailImage: string; // filename in public/uploads
   careInfo: PlantCareInfo;
   entries: PlantEntry[];
+  wateringIntervalDays: number; // how often to water, in days (e.g., 3 = every 3 days)
+  wateringHistory: WateringEvent[];
 }
 
 export interface FrostDates {
