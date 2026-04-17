@@ -52,6 +52,14 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000) in your browser.
 
+### Aspire
+
+```bash
+npm run aspire:start
+```
+
+This starts the Next.js app through the Aspire AppHost.
+
 ### Build
 
 ```bash
