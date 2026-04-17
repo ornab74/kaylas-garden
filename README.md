@@ -20,6 +20,10 @@ Azure has been removed.
   - a newly selected plant image
   - or a decrypted historical plant image from the local vault when available
 - Shared technique cards that can be queued for IPFS/Hive-style replication
+- Managed Kubo/IPFS daemon controls that stay off until users explicitly enable them
+- Garden insights including a watchlist, activity timeline, and greenhouse digest
+- Encrypted AES-GCM network secret storage for IPFS and Hive identities
+- Community pin groups, comments, and peer co-pin requests for faster IPFS access
 - Local-first by default, with cloud mode explicitly opt-in
 - Optional IPFS Kubo HTTPX client
 - Optional Hive JSON-RPC checkpoint preparation
@@ -130,6 +134,49 @@ Technique cards let users record reusable plant knowledge:
 - privacy class
 
 These are stored locally first and can be queued for IPFS/Hive style distribution when cloud mode is enabled.
+
+### Encrypted Network Vault
+
+The Settings tab now includes an AES-GCM secret vault for sensitive network identity material such as:
+
+- IPFS user id
+- pin surface or pinning service label
+- pin surface token / bearer token
+- Hive username
+- Hive posting key
+
+These are stored separately from plain runtime settings in an encrypted file and are masked in status views.
+
+### Community Pin Surface
+
+The Community tab lets growers build a cooperative plant network with:
+
+- active peer plant users
+- shared pin groups
+- group comments
+- peer co-pin requests for specific CIDs
+
+That gives the app a local-first collaboration surface for asking peers to keep important plant timelines warm and easier to fetch over IPFS.
+
+### Insights Workboard
+
+The Insights tab adds a higher-level garden operations view with:
+
+- a plant watchlist ranked by current priority
+- a cross-plant activity timeline
+- a greenhouse digest that combines care signals with infrastructure state
+
+### Managed IPFS Daemon
+
+The Settings tab can manage a local Kubo daemon, but only after the user explicitly enables it.
+
+That managed path includes:
+
+- optional managed binary installation
+- optional repo initialization
+- start and stop controls
+- persistent repo and log paths inside the runtime root
+- daemon status reporting without forcing cloud mode on
 
 ## Storage Model
 
@@ -257,8 +304,19 @@ Check network and OQS state:
 
 ```bash
 python3 main.py network-status
+python3 main.py secret-status
+python3 main.py ipfs-daemon-status
 python3 main.py oqs-status
 python3 main.py oqs-search --query ML
+```
+
+Garden operations views:
+
+```bash
+python3 main.py activity
+python3 main.py watchlist
+python3 main.py garden-digest
+python3 main.py community-summary
 ```
 
 ## LiteRT-LM And Gemma 4
@@ -293,6 +351,8 @@ The runtime includes a fuller HTTPX Kubo client for:
 
 It stays inactive until cloud mode and `ipfs_enabled` are turned on.
 
+There is also an optional managed daemon path for users who want the app to maintain a local Kubo binary and repo directly. The helper script for that is [scripts/install_kubo.sh](./scripts/install_kubo.sh).
+
 ### Hive
 
 The runtime includes a Hive JSON-RPC client for:
@@ -319,6 +379,7 @@ Official upstream repositories:
 
 - [main.py](./main.py): single-file app, runtime, CLI, UI, prompt system, IPFS/Hive/OQS integration
 - [scripts/build_oqs.sh](./scripts/build_oqs.sh): local OQS build helper
+- [scripts/install_kubo.sh](./scripts/install_kubo.sh): optional managed Kubo install helper
 - [requirements-oqs.txt](./requirements-oqs.txt): OQS-related Python dependency hints
 
 ## Current Status

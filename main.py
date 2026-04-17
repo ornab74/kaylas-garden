@@ -23,8 +23,10 @@ import hashlib
 import hmac
 import json
 import os
+import signal
 import shutil
 import struct
+import subprocess
 import threading
 import time
 import uuid
@@ -99,10 +101,14 @@ KEY_WRAP_NONCE_LEN = 12
 DEFAULT_IPFS_API = os.environ.get("KAYLAS_GARDEN_IPFS_API", "http://127.0.0.1:5001/api/v0")
 DEFAULT_HIVE_API = os.environ.get("KAYLAS_GARDEN_HIVE_API", "https://api.hive.blog")
 DEFAULT_TRUSTED_NODES = ("local-ipfs", "home-greenhouse", "community-relay-east")
+DEFAULT_IPFS_REPO_SUBDIR = "ipfs-repo"
+DEFAULT_IPFS_DAEMON_LOG = "ipfs-daemon.log"
+DEFAULT_IPFS_MANAGED_BINARY_SUBDIR = "ipfs"
 OQS_LIB_REPO = "https://github.com/open-quantum-safe/liboqs"
 OQS_PYTHON_REPO = "https://github.com/open-quantum-safe/liboqs-python"
 OQS_PYTHON_VCS = f"git+{OQS_PYTHON_REPO}.git"
 OQS_BUILD_SCRIPT = "scripts/build_oqs.sh"
+KUBO_INSTALL_SCRIPT = "scripts/install_kubo.sh"
 NETWORK_MODE_OPTIONS = ("local-first", "cloud")
 CURATED_OQS_KEMS = (
     "ML-KEM-512",
@@ -192,13 +198,19 @@ class GardenPaths:
     models_dir: Path
     cache_dir: Path
     temp_dir: Path
+    tools_dir: Path
     key_path: Path
     vault_path: Path
+    secret_settings_path: Path
     settings_path: Path
     leafvault_dir: Path
     anchors_dir: Path
     sync_dir: Path
     reports_dir: Path
+    ipfs_repo_dir: Path
+    ipfs_daemon_pid_path: Path
+    ipfs_daemon_log_path: Path
+    ipfs_managed_dir: Path
     plain_model_path: Path
     encrypted_model_path: Path
 
@@ -341,6 +353,63 @@ class SharedTechnique:
 
 
 @dataclass
+class PlantUserPeer:
+    peer_id: str
+    created_at: str
+    display_name: str
+    hive_username: str
+    ipfs_user_id: str
+    pin_group: str
+    notes: str
+    status: str = "active"
+
+
+@dataclass
+class PeerPinGroup:
+    group_id: str
+    created_at: str
+    name: str
+    description: str
+    privacy_class: str
+    owner_sync_id: str
+    tags: List[str] = field(default_factory=list)
+    member_peer_ids: List[str] = field(default_factory=list)
+    metadata_cid: Optional[str] = None
+    checkpoint_id: Optional[str] = None
+
+
+@dataclass
+class PinGroupComment:
+    comment_id: str
+    group_id: str
+    created_at: str
+    author_sync_id: str
+    author_label: str
+    body: str
+    plant_id: str = ""
+    target_cids: List[str] = field(default_factory=list)
+    metadata_cid: Optional[str] = None
+    checkpoint_id: Optional[str] = None
+    sync_job_id: Optional[str] = None
+
+
+@dataclass
+class PeerPinRequest:
+    request_id: str
+    group_id: str
+    created_at: str
+    requester_sync_id: str
+    requester_label: str
+    cid: str
+    target_peer_ids: List[str]
+    note: str
+    local_pin_status: str
+    metadata_cid: Optional[str] = None
+    checkpoint_id: Optional[str] = None
+    sync_job_id: Optional[str] = None
+
+
+@dataclass
 class LeafVaultManifest:
     plant_id: str
     bucket: str
@@ -391,6 +460,13 @@ DEFAULT_SETTINGS = {
     "ipfs_bearer_token": "",
     "ipfs_mfs_root": "/kaylas-garden",
     "ipfs_pin_on_add": True,
+    "ipfs_daemon_enabled": False,
+    "ipfs_daemon_auto_install": False,
+    "ipfs_daemon_auto_start": False,
+    "ipfs_daemon_binary": "",
+    "ipfs_daemon_repo": "",
+    "ipfs_kubo_version": "",
+    "ipfs_kubo_download_url": "",
     "hive_enabled": False,
     "hive_api": DEFAULT_HIVE_API,
     "hive_account": "",
@@ -398,6 +474,19 @@ DEFAULT_SETTINGS = {
     "trusted_nodes": list(DEFAULT_TRUSTED_NODES),
     "bootstrap_complete": False,
 }
+SECRET_NETWORK_KEYS = (
+    "ipfs_user_id",
+    "ipfs_pin_surface",
+    "ipfs_pin_surface_token",
+    "ipfs_bearer_token",
+    "hive_username",
+    "hive_posting_key",
+    "hive_active_key",
+)
+PLAINTEXT_SECRET_SETTING_KEYS = (
+    "ipfs_bearer_token",
+    "hive_account",
+)
 
 
 def now_iso() -> str:
@@ -451,6 +540,16 @@ def httpx_available() -> bool:
     return httpx is not None
 
 
+def process_is_running(pid: Optional[int]) -> bool:
+    if pid is None or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
 def human_size(value: int) -> str:
     units = ["B", "KB", "MB", "GB", "TB"]
     size = float(max(0, int(value)))
@@ -460,6 +559,15 @@ def human_size(value: int) -> str:
             break
         size /= 1024.0
     return f"{int(size)}B" if unit == "B" else f"{size:.1f}{unit}"
+
+
+def mask_secret(value: Any, *, prefix: int = 2, suffix: int = 2) -> str:
+    text = sanitize_text(value, max_chars=400)
+    if not text:
+        return ""
+    if len(text) <= prefix + suffix:
+        return "*" * len(text)
+    return f"{text[:prefix]}{'*' * max(4, len(text) - prefix - suffix)}{text[-suffix:]}"
 
 
 def _set_owner_only_permissions(path: Path, *, is_dir: bool = False) -> None:
@@ -684,13 +792,19 @@ def set_app_paths(root: Union[str, Path]) -> GardenPaths:
         models_dir=base / "models",
         cache_dir=base / ".litert_cache",
         temp_dir=base / ".tmp",
+        tools_dir=base / "tools",
         key_path=base / ".enc_key",
         vault_path=base / "garden_vault.json.aes",
+        secret_settings_path=base / "network_secrets.json.aes",
         settings_path=base / "settings.json",
         leafvault_dir=base / "leafvault",
         anchors_dir=base / "anchors",
         sync_dir=base / "sync",
         reports_dir=base / "reports",
+        ipfs_repo_dir=base / DEFAULT_IPFS_REPO_SUBDIR,
+        ipfs_daemon_pid_path=base / "ipfs-daemon.pid",
+        ipfs_daemon_log_path=base / "reports" / DEFAULT_IPFS_DAEMON_LOG,
+        ipfs_managed_dir=base / "tools" / DEFAULT_IPFS_MANAGED_BINARY_SUBDIR,
         plain_model_path=base / "models" / MODEL_FILE,
         encrypted_model_path=base / "models" / f"{MODEL_FILE}.aes",
     )
@@ -699,10 +813,13 @@ def set_app_paths(root: Union[str, Path]) -> GardenPaths:
         paths.models_dir,
         paths.cache_dir,
         paths.temp_dir,
+        paths.tools_dir,
         paths.leafvault_dir,
         paths.anchors_dir,
         paths.sync_dir,
         paths.reports_dir,
+        paths.ipfs_repo_dir,
+        paths.ipfs_managed_dir,
     ):
         directory.mkdir(parents=True, exist_ok=True)
         _set_owner_only_permissions(directory, is_dir=True)
@@ -725,7 +842,8 @@ def _tmp_path(prefix: str, suffix: str) -> Path:
 
 
 def load_settings(paths: Optional[GardenPaths] = None) -> Dict[str, Any]:
-    target = (paths or require_paths()).settings_path
+    current_paths = paths or require_paths()
+    target = current_paths.settings_path
     raw = load_json_file(target, {})
     settings = dict(DEFAULT_SETTINGS)
     settings.update(raw if isinstance(raw, dict) else {})
@@ -748,6 +866,13 @@ def load_settings(paths: Optional[GardenPaths] = None) -> Dict[str, Any]:
     settings["ipfs_bearer_token"] = sanitize_text(settings.get("ipfs_bearer_token"), max_chars=400)
     settings["ipfs_mfs_root"] = sanitize_text(settings.get("ipfs_mfs_root") or "/kaylas-garden", max_chars=240) or "/kaylas-garden"
     settings["ipfs_pin_on_add"] = bool(settings.get("ipfs_pin_on_add", True))
+    settings["ipfs_daemon_enabled"] = bool(settings.get("ipfs_daemon_enabled", False))
+    settings["ipfs_daemon_auto_install"] = bool(settings.get("ipfs_daemon_auto_install", False))
+    settings["ipfs_daemon_auto_start"] = bool(settings.get("ipfs_daemon_auto_start", False))
+    settings["ipfs_daemon_binary"] = sanitize_text(settings.get("ipfs_daemon_binary"), max_chars=400)
+    settings["ipfs_daemon_repo"] = sanitize_text(settings.get("ipfs_daemon_repo") or str(current_paths.ipfs_repo_dir), max_chars=400)
+    settings["ipfs_kubo_version"] = sanitize_text(settings.get("ipfs_kubo_version"), max_chars=80)
+    settings["ipfs_kubo_download_url"] = sanitize_text(settings.get("ipfs_kubo_download_url"), max_chars=400)
     settings["hive_enabled"] = bool(settings.get("hive_enabled", False))
     settings["hive_api"] = sanitize_text(settings.get("hive_api") or DEFAULT_HIVE_API, max_chars=240)
     settings["hive_account"] = sanitize_text(settings.get("hive_account"), max_chars=80)
@@ -759,6 +884,8 @@ def load_settings(paths: Optional[GardenPaths] = None) -> Dict[str, Any]:
 def save_settings(settings: Dict[str, Any], paths: Optional[GardenPaths] = None) -> None:
     merged = load_settings(paths)
     merged.update(settings)
+    for key in PLAINTEXT_SECRET_SETTING_KEYS:
+        merged[key] = ""
     _atomic_write_bytes((paths or require_paths()).settings_path, json.dumps(merged, indent=2).encode("utf-8"))
 
 
@@ -822,9 +949,14 @@ class EncryptedGardenVault:
             "diagnoses": [],
             "health_checkins": [],
             "shared_techniques": [],
+            "peer_users": [],
+            "pin_groups": [],
+            "pin_group_comments": [],
+            "peer_pin_requests": [],
             "anchor_queue": [],
             "sync_queue": [],
             "reputation": {},
+            "runtime_notes": {},
         }
 
     def load(self, password: Optional[str] = None) -> Dict[str, Any]:
@@ -848,6 +980,55 @@ class EncryptedGardenVault:
             payload = json.dumps(state, indent=2).encode("utf-8")
             encrypted = aes_encrypt(payload, self.get_or_create_key(password=password))
             _atomic_write_bytes(self.paths.vault_path, encrypted)
+
+
+class SecretSettingsVault:
+    def __init__(self, key_provider: Callable[[], bytes], paths: Optional[GardenPaths] = None):
+        self.key_provider = key_provider
+        self.paths = paths or require_paths()
+        self.lock = RLock()
+
+    def default_secrets(self) -> Dict[str, str]:
+        return {key: "" for key in SECRET_NETWORK_KEYS}
+
+    def load(self) -> Dict[str, str]:
+        with self.lock:
+            if not self.paths.secret_settings_path.exists():
+                return self.default_secrets()
+            try:
+                payload = aes_decrypt(self.paths.secret_settings_path.read_bytes(), self.key_provider())
+                raw = json.loads(payload.decode("utf-8"))
+            except Exception:
+                return self.default_secrets()
+            secrets = self.default_secrets()
+            if isinstance(raw, dict):
+                for key in SECRET_NETWORK_KEYS:
+                    secrets[key] = sanitize_text(raw.get(key), max_chars=400 if "key" not in key else 800)
+            return secrets
+
+    def save(self, secrets: Mapping[str, Any]) -> Dict[str, str]:
+        with self.lock:
+            current = self.default_secrets()
+            current.update(self.load())
+            for key in SECRET_NETWORK_KEYS:
+                if key in secrets:
+                    current[key] = sanitize_text(secrets.get(key), max_chars=400 if "key" not in key else 800)
+            encrypted = aes_encrypt(json.dumps(current, indent=2).encode("utf-8"), self.key_provider())
+            _atomic_write_bytes(self.paths.secret_settings_path, encrypted)
+            return current
+
+    def status(self) -> Dict[str, Any]:
+        secrets = self.load()
+        return {
+            "vault_path": str(self.paths.secret_settings_path),
+            "stored_fields": {key: bool(secrets.get(key)) for key in SECRET_NETWORK_KEYS},
+            "masked": {
+                "ipfs_user_id": mask_secret(secrets.get("ipfs_user_id")),
+                "ipfs_pin_surface": sanitize_text(secrets.get("ipfs_pin_surface"), max_chars=120),
+                "hive_username": sanitize_text(secrets.get("hive_username"), max_chars=80),
+                "hive_posting_key": mask_secret(secrets.get("hive_posting_key")),
+            },
+        }
 
 
 def security_profile_from_dict(raw: Mapping[str, Any]) -> SecurityProfile:
@@ -1003,6 +1184,67 @@ def shared_technique_from_dict(raw: Mapping[str, Any]) -> SharedTechnique:
         steps=[sanitize_text(item, max_chars=240) for item in list(raw.get("steps") or []) if sanitize_text(item, max_chars=240)],
         tags=[sanitize_text(item, max_chars=40) for item in list(raw.get("tags") or []) if sanitize_text(item, max_chars=40)],
         privacy_class=normalize_privacy_class(raw.get("privacy_class")),
+        metadata_cid=sanitize_text(raw.get("metadata_cid"), max_chars=160) or None,
+        checkpoint_id=sanitize_text(raw.get("checkpoint_id"), max_chars=80) or None,
+        sync_job_id=sanitize_text(raw.get("sync_job_id"), max_chars=80) or None,
+    )
+
+
+def peer_user_from_dict(raw: Mapping[str, Any]) -> PlantUserPeer:
+    return PlantUserPeer(
+        peer_id=sanitize_text(raw.get("peer_id"), max_chars=64),
+        created_at=sanitize_text(raw.get("created_at"), max_chars=64),
+        display_name=sanitize_text(raw.get("display_name"), max_chars=160),
+        hive_username=sanitize_text(raw.get("hive_username"), max_chars=80),
+        ipfs_user_id=sanitize_text(raw.get("ipfs_user_id"), max_chars=160),
+        pin_group=sanitize_text(raw.get("pin_group"), max_chars=160),
+        notes=sanitize_text(raw.get("notes"), max_chars=1200),
+        status=sanitize_text(raw.get("status") or "active", max_chars=40),
+    )
+
+
+def pin_group_from_dict(raw: Mapping[str, Any]) -> PeerPinGroup:
+    return PeerPinGroup(
+        group_id=sanitize_text(raw.get("group_id"), max_chars=64),
+        created_at=sanitize_text(raw.get("created_at"), max_chars=64),
+        name=sanitize_text(raw.get("name"), max_chars=160),
+        description=sanitize_text(raw.get("description"), max_chars=2000),
+        privacy_class=normalize_privacy_class(raw.get("privacy_class")),
+        owner_sync_id=sanitize_text(raw.get("owner_sync_id"), max_chars=64),
+        tags=[sanitize_text(item, max_chars=40) for item in list(raw.get("tags") or []) if sanitize_text(item, max_chars=40)],
+        member_peer_ids=[sanitize_text(item, max_chars=64) for item in list(raw.get("member_peer_ids") or []) if sanitize_text(item, max_chars=64)],
+        metadata_cid=sanitize_text(raw.get("metadata_cid"), max_chars=160) or None,
+        checkpoint_id=sanitize_text(raw.get("checkpoint_id"), max_chars=80) or None,
+    )
+
+
+def pin_group_comment_from_dict(raw: Mapping[str, Any]) -> PinGroupComment:
+    return PinGroupComment(
+        comment_id=sanitize_text(raw.get("comment_id"), max_chars=64),
+        group_id=sanitize_text(raw.get("group_id"), max_chars=64),
+        created_at=sanitize_text(raw.get("created_at"), max_chars=64),
+        author_sync_id=sanitize_text(raw.get("author_sync_id"), max_chars=64),
+        author_label=sanitize_text(raw.get("author_label"), max_chars=160),
+        body=sanitize_text(raw.get("body"), max_chars=4000),
+        plant_id=sanitize_text(raw.get("plant_id"), max_chars=64),
+        target_cids=[sanitize_text(item, max_chars=160) for item in list(raw.get("target_cids") or []) if sanitize_text(item, max_chars=160)],
+        metadata_cid=sanitize_text(raw.get("metadata_cid"), max_chars=160) or None,
+        checkpoint_id=sanitize_text(raw.get("checkpoint_id"), max_chars=80) or None,
+        sync_job_id=sanitize_text(raw.get("sync_job_id"), max_chars=80) or None,
+    )
+
+
+def peer_pin_request_from_dict(raw: Mapping[str, Any]) -> PeerPinRequest:
+    return PeerPinRequest(
+        request_id=sanitize_text(raw.get("request_id"), max_chars=64),
+        group_id=sanitize_text(raw.get("group_id"), max_chars=64),
+        created_at=sanitize_text(raw.get("created_at"), max_chars=64),
+        requester_sync_id=sanitize_text(raw.get("requester_sync_id"), max_chars=64),
+        requester_label=sanitize_text(raw.get("requester_label"), max_chars=160),
+        cid=sanitize_text(raw.get("cid"), max_chars=160),
+        target_peer_ids=[sanitize_text(item, max_chars=64) for item in list(raw.get("target_peer_ids") or []) if sanitize_text(item, max_chars=64)],
+        note=sanitize_text(raw.get("note"), max_chars=2000),
+        local_pin_status=sanitize_text(raw.get("local_pin_status") or "queued-local", max_chars=80),
         metadata_cid=sanitize_text(raw.get("metadata_cid"), max_chars=160) or None,
         checkpoint_id=sanitize_text(raw.get("checkpoint_id"), max_chars=80) or None,
         sync_job_id=sanitize_text(raw.get("sync_job_id"), max_chars=80) or None,
@@ -1451,19 +1693,246 @@ class OQSPQAdvisor:
         }
 
 
-class IpfsKuboClient:
+class ManagedIpfsDaemon:
     def __init__(self, settings_provider: Callable[[], Dict[str, Any]], paths: Optional[GardenPaths] = None):
         self.settings_provider = settings_provider
+        self.paths = paths or require_paths()
+        self.install_script = (REPO_ROOT / KUBO_INSTALL_SCRIPT).resolve()
+
+    def _settings(self) -> Dict[str, Any]:
+        return self.settings_provider()
+
+    def enabled(self) -> bool:
+        return bool(self._settings().get("ipfs_daemon_enabled", False))
+
+    def auto_install_enabled(self) -> bool:
+        return bool(self._settings().get("ipfs_daemon_auto_install", False))
+
+    def auto_start_enabled(self) -> bool:
+        return bool(self._settings().get("ipfs_daemon_auto_start", False))
+
+    def repo_path(self) -> Path:
+        configured = sanitize_text(self._settings().get("ipfs_daemon_repo") or str(self.paths.ipfs_repo_dir), max_chars=400)
+        return Path(configured).expanduser()
+
+    def managed_binary_path(self) -> Path:
+        suffix = ".exe" if os.name == "nt" else ""
+        return self.paths.ipfs_managed_dir / f"ipfs{suffix}"
+
+    def resolved_binary_path(self) -> Optional[Path]:
+        configured = sanitize_text(self._settings().get("ipfs_daemon_binary"), max_chars=400)
+        candidates: List[Optional[Union[str, Path]]] = [
+            configured or None,
+            self.managed_binary_path(),
+            shutil.which("ipfs"),
+        ]
+        for candidate in candidates:
+            if not candidate:
+                continue
+            path = Path(candidate).expanduser()
+            if path.exists() and path.is_file():
+                return path
+        return None
+
+    def binary_exists(self) -> bool:
+        return self.resolved_binary_path() is not None
+
+    def _read_pid(self) -> Optional[int]:
+        if not self.paths.ipfs_daemon_pid_path.exists():
+            return None
+        try:
+            return int(self.paths.ipfs_daemon_pid_path.read_text(encoding="utf-8").strip())
+        except Exception:
+            return None
+
+    def _write_pid(self, pid: int) -> None:
+        _atomic_write_bytes(self.paths.ipfs_daemon_pid_path, f"{pid}\n".encode("utf-8"))
+
+    def _clear_pid(self) -> None:
+        safe_cleanup([self.paths.ipfs_daemon_pid_path])
+
+    def running(self) -> bool:
+        pid = self._read_pid()
+        if not process_is_running(pid):
+            self._clear_pid()
+            return False
+        return True
+
+    def _run(self, args: List[str], *, env: Optional[Dict[str, str]] = None, timeout: int = 180) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            args,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=env,
+        )
+
+    def _binary_env(self) -> Tuple[Path, Dict[str, str]]:
+        binary = self.resolved_binary_path()
+        if binary is None:
+            raise FileNotFoundError("No IPFS binary is available yet. Enable managed install or provide an existing ipfs binary path.")
+        env = os.environ.copy()
+        env["IPFS_PATH"] = str(self.repo_path())
+        return binary, env
+
+    def install_instructions(self) -> Dict[str, Any]:
+        settings = self._settings()
+        return {
+            "enabled": self.enabled(),
+            "auto_install": self.auto_install_enabled(),
+            "install_script": str(self.install_script),
+            "managed_binary_path": str(self.managed_binary_path()),
+            "repo_path": str(self.repo_path()),
+            "binary_path": str(self.resolved_binary_path()) if self.resolved_binary_path() else "",
+            "kubo_version": sanitize_text(settings.get("ipfs_kubo_version"), max_chars=80),
+            "download_url": sanitize_text(settings.get("ipfs_kubo_download_url"), max_chars=400),
+            "needs_user_enablement": not self.enabled(),
+        }
+
+    def install(self) -> Dict[str, Any]:
+        if not self.enabled():
+            raise RuntimeError("Managed IPFS daemon install is disabled. Turn on managed IPFS in Settings first.")
+        if not self.install_script.exists():
+            raise FileNotFoundError(f"Kubo install script is missing: {self.install_script}")
+        env = os.environ.copy()
+        version = sanitize_text(self._settings().get("ipfs_kubo_version"), max_chars=80)
+        download_url = sanitize_text(self._settings().get("ipfs_kubo_download_url"), max_chars=400)
+        if version:
+            env["KUBO_VERSION"] = version
+        if download_url:
+            env["KUBO_TARBALL_URL"] = download_url
+        result = self._run(["bash", str(self.install_script), str(self.paths.ipfs_managed_dir)], env=env)
+        binary = self.resolved_binary_path()
+        return {
+            "installed": binary is not None and binary.exists(),
+            "managed_binary_path": str(self.managed_binary_path()),
+            "binary_path": str(binary) if binary else "",
+            "stdout": sanitize_text(result.stdout, max_chars=6000),
+        }
+
+    def ensure_repo_initialized(self) -> Dict[str, Any]:
+        repo = self.repo_path()
+        repo.mkdir(parents=True, exist_ok=True)
+        config_path = repo / "config"
+        if config_path.exists():
+            return {"initialized": True, "repo_path": str(repo), "config_path": str(config_path)}
+        binary, env = self._binary_env()
+        result = self._run([str(binary), "init", "--profile=server"], env=env)
+        return {
+            "initialized": config_path.exists(),
+            "repo_path": str(repo),
+            "config_path": str(config_path),
+            "stdout": sanitize_text(result.stdout, max_chars=4000),
+        }
+
+    def start(self) -> Dict[str, Any]:
+        if not self.enabled():
+            raise RuntimeError("Managed IPFS daemon start is disabled. Turn on managed IPFS in Settings first.")
+        if self.running():
+            return self.status()
+        if not self.binary_exists():
+            if not self.auto_install_enabled():
+                raise FileNotFoundError("No managed IPFS binary found. Enable auto-install or run the install action first.")
+            self.install()
+        self.ensure_repo_initialized()
+        binary, env = self._binary_env()
+        self.paths.ipfs_daemon_log_path.parent.mkdir(parents=True, exist_ok=True)
+        with self.paths.ipfs_daemon_log_path.open("ab") as log_handle:
+            process = subprocess.Popen(
+                [str(binary), "daemon", "--migrate=true"],
+                env=env,
+                stdin=subprocess.DEVNULL,
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+        self._write_pid(process.pid)
+        for _ in range(24):
+            if process.poll() is not None:
+                self._clear_pid()
+                break
+            time.sleep(0.25)
+            if self.running():
+                return self.status()
+        return self.status()
+
+    def stop(self) -> Dict[str, Any]:
+        pid = self._read_pid()
+        if not process_is_running(pid):
+            self._clear_pid()
+            return self.status()
+        try:
+            if hasattr(os, "killpg"):
+                os.killpg(os.getpgid(pid), signal.SIGTERM)  # type: ignore[arg-type]
+            else:
+                os.kill(pid, signal.SIGTERM)  # type: ignore[arg-type]
+        except Exception:
+            try:
+                os.kill(pid, signal.SIGTERM)  # type: ignore[arg-type]
+            except Exception:
+                pass
+        for _ in range(20):
+            if not process_is_running(pid):
+                break
+            time.sleep(0.25)
+        self._clear_pid()
+        return self.status()
+
+    def version(self) -> Dict[str, Any]:
+        binary, env = self._binary_env()
+        result = self._run([str(binary), "version", "--number"], env=env, timeout=30)
+        return {"version": sanitize_text(result.stdout, max_chars=80), "binary_path": str(binary)}
+
+    def status(self) -> Dict[str, Any]:
+        binary = self.resolved_binary_path()
+        repo = self.repo_path()
+        running = self.running()
+        status = {
+            "enabled": self.enabled(),
+            "auto_install": self.auto_install_enabled(),
+            "auto_start": self.auto_start_enabled(),
+            "binary_exists": binary is not None and binary.exists(),
+            "binary_path": str(binary) if binary else "",
+            "managed_binary_path": str(self.managed_binary_path()),
+            "repo_path": str(repo),
+            "repo_initialized": (repo / "config").exists(),
+            "pid": self._read_pid(),
+            "running": running,
+            "log_path": str(self.paths.ipfs_daemon_log_path),
+            "install_script": str(self.install_script),
+        }
+        if binary is not None and binary.exists():
+            try:
+                status.update(self.version())
+            except Exception as exc:
+                status["version_error"] = sanitize_text(exc, max_chars=240)
+        return status
+
+
+class IpfsKuboClient:
+    def __init__(
+        self,
+        settings_provider: Callable[[], Dict[str, Any]],
+        secret_provider: Optional[Callable[[], Dict[str, str]]] = None,
+        paths: Optional[GardenPaths] = None,
+    ):
+        self.settings_provider = settings_provider
+        self.secret_provider = secret_provider or (lambda: {})
         self.paths = paths or require_paths()
 
     def _settings(self) -> Dict[str, Any]:
         return self.settings_provider()
 
+    def _secrets(self) -> Dict[str, str]:
+        return dict(self.secret_provider() or {})
+
     def _api(self) -> str:
         return sanitize_text(self._settings().get("ipfs_api") or DEFAULT_IPFS_API, max_chars=240)
 
     def _headers(self) -> Dict[str, str]:
-        token = sanitize_text(self._settings().get("ipfs_bearer_token"), max_chars=400)
+        secrets = self._secrets()
+        token = sanitize_text(secrets.get("ipfs_bearer_token") or secrets.get("ipfs_pin_surface_token"), max_chars=400)
         return {"Authorization": f"Bearer {token}"} if token else {}
 
     def enabled(self) -> bool:
@@ -1506,6 +1975,9 @@ class IpfsKuboClient:
         if cid:
             params["arg"] = cid
         return self._post("pin/ls", params=params).json()
+
+    def pin_add(self, cid: str) -> Dict[str, Any]:
+        return self._post("pin/add", params={"arg": cid}).json()
 
     def files_mkdir(self, path: str) -> None:
         self._post("files/mkdir", params={"arg": path, "parents": "true", "cid-version": "1"})
@@ -1551,6 +2023,8 @@ class IpfsKuboClient:
             "ipfs_enabled": bool(settings.get("ipfs_enabled", False)),
             "api": self._api(),
             "mfs_root": sanitize_text(settings.get("ipfs_mfs_root") or "/kaylas-garden", max_chars=240),
+            "ipfs_user_id": mask_secret(self._secrets().get("ipfs_user_id")),
+            "pin_surface": sanitize_text(self._secrets().get("ipfs_pin_surface"), max_chars=120),
         }
         if not self.enabled():
             return status
@@ -1564,15 +2038,27 @@ class IpfsKuboClient:
 
 
 class HiveBlockchainClient:
-    def __init__(self, settings_provider: Callable[[], Dict[str, Any]], paths: Optional[GardenPaths] = None):
+    def __init__(
+        self,
+        settings_provider: Callable[[], Dict[str, Any]],
+        secret_provider: Optional[Callable[[], Dict[str, str]]] = None,
+        paths: Optional[GardenPaths] = None,
+    ):
         self.settings_provider = settings_provider
+        self.secret_provider = secret_provider or (lambda: {})
         self.paths = paths or require_paths()
 
     def _settings(self) -> Dict[str, Any]:
         return self.settings_provider()
 
+    def _secrets(self) -> Dict[str, str]:
+        return dict(self.secret_provider() or {})
+
     def _api(self) -> str:
         return sanitize_text(self._settings().get("hive_api") or DEFAULT_HIVE_API, max_chars=240)
+
+    def _hive_username(self) -> str:
+        return sanitize_text(self._secrets().get("hive_username") or self._settings().get("hive_account"), max_chars=80)
 
     def enabled(self) -> bool:
         return hive_network_enabled(self._settings()) and httpx_available()
@@ -1606,12 +2092,26 @@ class HiveBlockchainClient:
         return {
             "id": "kaylas-garden",
             "required_auths": [],
-            "required_posting_auths": [sanitize_text(self._settings().get("hive_account"), max_chars=80)] if self._settings().get("hive_account") else [],
+            "required_posting_auths": [self._hive_username()] if self._hive_username() else [],
             "json": json.dumps(
                 {"app": "kaylas-garden", "type": "bloomtrace-checkpoint", "checkpoint": asdict(checkpoint)},
                 separators=(",", ":"),
                 ensure_ascii=True,
             ),
+        }
+
+    def prepare_group_comment_operation(self, *, group_name: str, body: str, title: str = "") -> Dict[str, Any]:
+        author = self._hive_username()
+        group_slug = sanitize_text(group_name.lower().replace(" ", "-"), max_chars=80) or "plant-users"
+        permlink = f"{group_slug}-{uuid.uuid4().hex[:10]}"
+        return {
+            "author": author,
+            "parent_author": "",
+            "parent_permlink": group_slug,
+            "permlink": permlink,
+            "title": sanitize_text(title, max_chars=120),
+            "body": sanitize_text(body, max_chars=8000),
+            "json_metadata": json.dumps({"app": "kaylas-garden", "type": "pin-group-comment", "group": group_slug}, separators=(",", ":"), ensure_ascii=True),
         }
 
     def status(self) -> Dict[str, Any]:
@@ -1625,7 +2125,8 @@ class HiveBlockchainClient:
             "hive_enabled": bool(settings.get("hive_enabled", False)),
             "broadcast_enabled": bool(settings.get("hive_broadcast_enabled", False)),
             "api": self._api(),
-            "account": sanitize_text(settings.get("hive_account"), max_chars=80),
+            "account": self._hive_username(),
+            "posting_key_present": bool(self._secrets().get("hive_posting_key")),
         }
         if not self.enabled():
             return status
@@ -2271,13 +2772,17 @@ class KaylasGardenRuntime:
         self.state = self.vault.load(password=password)
         self.settings = load_settings(self.paths)
         self.identity_service = PlantSyncIDService(lambda: self.vault.get_or_create_key(password=password))
+        self.secret_vault = SecretSettingsVault(lambda: self.vault.get_or_create_key(password=password), self.paths)
+        self.secret_settings = self.secret_vault.load()
+        self._migrate_plaintext_secrets()
         self.identity = self.identity_service.ensure_identity(self.state, self.settings.get("garden_name") or "Kayla's Garden")
         self.oqs_advisor = OQSPQAdvisor()
         self.model_manager = LiteRTModelManager(self.vault, self.paths)
         self.prompts = GardenPromptStudio()
         self.season_engine = SeasonGraphEngine(self.settings)
-        self.ipfs = IpfsKuboClient(lambda: load_settings(self.paths), self.paths)
-        self.hive = HiveBlockchainClient(lambda: load_settings(self.paths), self.paths)
+        self.ipfs_daemon = ManagedIpfsDaemon(lambda: load_settings(self.paths), self.paths)
+        self.ipfs = IpfsKuboClient(lambda: load_settings(self.paths), lambda: self.secret_settings, self.paths)
+        self.hive = HiveBlockchainClient(lambda: load_settings(self.paths), lambda: self.secret_settings, self.paths)
         self.leafvault = LeafVaultBuckets(
             lambda: self.vault.get_or_create_key(password=password),
             lambda: load_settings(self.paths),
@@ -2288,6 +2793,19 @@ class KaylasGardenRuntime:
         self.syncer = RootMeshSyncer(lambda: load_settings(self.paths), self.paths)
         self.phyto = PhytoScanEdge(self.model_manager, self.prompts)
         self._apply_settings_to_state()
+        self._maybe_auto_start_ipfs_daemon()
+
+    def _migrate_plaintext_secrets(self) -> None:
+        migrated: Dict[str, str] = {}
+        if not self.secret_settings.get("ipfs_bearer_token") and self.settings.get("ipfs_bearer_token"):
+            migrated["ipfs_bearer_token"] = sanitize_text(self.settings.get("ipfs_bearer_token"), max_chars=400)
+        if not self.secret_settings.get("hive_username") and self.settings.get("hive_account"):
+            migrated["hive_username"] = sanitize_text(self.settings.get("hive_account"), max_chars=80)
+        if not migrated:
+            return
+        self.secret_settings = self.secret_vault.save(migrated)
+        save_settings({"ipfs_bearer_token": "", "hive_account": ""}, self.paths)
+        self.settings = load_settings(self.paths)
 
     def _apply_settings_to_state(self) -> None:
         self.state["garden"]["name"] = sanitize_text(self.settings.get("garden_name") or "Kayla's Garden", max_chars=120)
@@ -2297,14 +2815,33 @@ class KaylasGardenRuntime:
         self.state["garden"]["network_mode"] = normalize_network_mode(self.settings.get("network_mode"))
         self.state["garden"]["cloud_mode"] = bool(self.settings.get("cloud_mode", False))
         self.state["garden"]["local_first_only"] = bool(self.settings.get("local_first_only", True))
+        self.state["garden"]["ipfs_daemon_enabled"] = bool(self.settings.get("ipfs_daemon_enabled", False))
 
     def reload_settings(self) -> None:
         self.settings = load_settings(self.paths)
+        self.secret_settings = self.secret_vault.load()
         self.season_engine = SeasonGraphEngine(self.settings)
         self._apply_settings_to_state()
 
+    def _maybe_auto_start_ipfs_daemon(self) -> None:
+        if not bool(self.settings.get("ipfs_daemon_enabled", False)):
+            return
+        if not bool(self.settings.get("ipfs_daemon_auto_start", False)):
+            return
+        try:
+            self.ipfs_daemon.start()
+        except Exception as exc:
+            self.state.setdefault("runtime_notes", {})["ipfs_daemon_auto_start_error"] = sanitize_text(exc, max_chars=400)
+
     def save(self) -> None:
         self.vault.save(self.state, password=self.password)
+
+    def save_network_secrets(self, secrets: Mapping[str, Any]) -> Dict[str, Any]:
+        self.secret_settings = self.secret_vault.save(secrets)
+        return self.secret_vault.status()
+
+    def network_secret_status(self) -> Dict[str, Any]:
+        return self.secret_vault.status()
 
     def bootstrap_repository_data(self, *, force: bool = False) -> Dict[str, Any]:
         plants_path = REPO_ROOT / "data" / "plants.json"
@@ -2620,6 +3157,185 @@ class KaylasGardenRuntime:
         if health.disease_risk >= 0.45:
             items.append("Check for spreading lesions, mildew, or stem softening and improve airflow.")
         return list(dict.fromkeys(items))[:4]
+
+    def ipfs_daemon_status(self) -> Dict[str, Any]:
+        return self.ipfs_daemon.status()
+
+    def install_ipfs_daemon(self) -> Dict[str, Any]:
+        result = self.ipfs_daemon.install()
+        self.reload_settings()
+        self.save()
+        return result
+
+    def start_ipfs_daemon(self) -> Dict[str, Any]:
+        result = self.ipfs_daemon.start()
+        self.reload_settings()
+        self.save()
+        return result
+
+    def stop_ipfs_daemon(self) -> Dict[str, Any]:
+        result = self.ipfs_daemon.stop()
+        self.reload_settings()
+        self.save()
+        return result
+
+    def activity_timeline(self, *, limit: int = 24) -> Dict[str, Any]:
+        events: List[Dict[str, Any]] = []
+        for plant in self.list_plants():
+            for observation in plant.observations:
+                events.append(
+                    {
+                        "timestamp": observation.recorded_at,
+                        "event_type": "observation",
+                        "plant_id": plant.plant_id,
+                        "plant_name": plant.name,
+                        "summary": sanitize_text(observation.note, max_chars=180),
+                        "status": observation.health.status,
+                        "tags": list(observation.tags),
+                    }
+                )
+        for diagnosis in list(self.state.get("diagnoses") or []):
+            if isinstance(diagnosis, dict):
+                parsed = diagnosis_from_dict(diagnosis)
+                passport = self.get_passport(parsed.plant_id)
+                events.append(
+                    {
+                        "timestamp": parsed.recorded_at,
+                        "event_type": "diagnosis",
+                        "plant_id": parsed.plant_id,
+                        "plant_name": passport.name,
+                        "summary": sanitize_text(parsed.symptom_summary, max_chars=180),
+                        "status": parsed.urgency,
+                        "tags": list(parsed.tags),
+                    }
+                )
+        for checkin in list(self.state.get("health_checkins") or []):
+            if isinstance(checkin, dict):
+                parsed = health_checkin_from_dict(checkin)
+                passport = self.get_passport(parsed.plant_id)
+                events.append(
+                    {
+                        "timestamp": parsed.recorded_at,
+                        "event_type": "health-checkin",
+                        "plant_id": parsed.plant_id,
+                        "plant_name": passport.name,
+                        "summary": sanitize_text(parsed.note, max_chars=180),
+                        "status": parsed.overall_status,
+                        "tags": list(parsed.tags),
+                    }
+                )
+        for technique in list(self.state.get("shared_techniques") or []):
+            if isinstance(technique, dict):
+                parsed = shared_technique_from_dict(technique)
+                passport = self.get_passport(parsed.plant_id)
+                events.append(
+                    {
+                        "timestamp": parsed.created_at,
+                        "event_type": "shared-technique",
+                        "plant_id": parsed.plant_id,
+                        "plant_name": passport.name,
+                        "summary": sanitize_text(parsed.title, max_chars=180),
+                        "status": parsed.privacy_class,
+                        "tags": list(parsed.tags),
+                    }
+                )
+        for comment in list(self.state.get("pin_group_comments") or []):
+            if isinstance(comment, dict):
+                parsed = pin_group_comment_from_dict(comment)
+                events.append(
+                    {
+                        "timestamp": parsed.created_at,
+                        "event_type": "pin-group-comment",
+                        "plant_id": parsed.plant_id,
+                        "plant_name": self.get_passport(parsed.plant_id).name if parsed.plant_id and parsed.plant_id in self.state.get("plants", {}) else "Community",
+                        "summary": sanitize_text(parsed.body, max_chars=180),
+                        "status": parsed.group_id,
+                        "tags": list(parsed.target_cids)[:3],
+                    }
+                )
+        for request in list(self.state.get("peer_pin_requests") or []):
+            if isinstance(request, dict):
+                parsed = peer_pin_request_from_dict(request)
+                events.append(
+                    {
+                        "timestamp": parsed.created_at,
+                        "event_type": "peer-pin-request",
+                        "plant_id": "",
+                        "plant_name": "Community",
+                        "summary": sanitize_text(parsed.note or parsed.cid, max_chars=180),
+                        "status": parsed.local_pin_status,
+                        "tags": [parsed.cid] if parsed.cid else [],
+                    }
+                )
+        events.sort(key=lambda item: sanitize_text(item.get("timestamp"), max_chars=64), reverse=True)
+        return {"generated_at": now_iso(), "items": events[:limit]}
+
+    def watchlist_report(self) -> Dict[str, Any]:
+        report: List[Dict[str, Any]] = []
+        season = self.season_engine.seasonal_context()
+        for plant in self.list_plants():
+            score = 0
+            reasons: List[str] = []
+            latest = plant.observations[-1] if plant.observations else None
+            diagnoses = self._diagnoses_for_plant(plant.plant_id)
+            latest_diagnosis = diagnoses[-1] if diagnoses else None
+            checkins = self._health_checkins_for_plant(plant.plant_id)
+            latest_checkin = checkins[-1] if checkins else None
+            if latest is None:
+                score += 35
+                reasons.append("No observations logged yet.")
+            else:
+                if latest.health.status == "needs-attention":
+                    score += 45
+                    reasons.append("Latest observation flagged needs-attention.")
+                elif latest.health.status == "watch":
+                    score += 20
+                    reasons.append("Latest observation is still in watch mode.")
+            if latest_diagnosis is not None:
+                urgency = latest_diagnosis.urgency.lower()
+                if urgency == "high":
+                    score += 40
+                    reasons.append("Recent diagnosis marked high urgency.")
+                elif urgency == "medium":
+                    score += 22
+                    reasons.append("Recent diagnosis marked medium urgency.")
+            if latest_checkin is None:
+                score += 15
+                reasons.append("No health check-in recorded yet.")
+            elif latest_checkin.overall_status == "needs-attention":
+                score += 25
+                reasons.append("Latest health check-in still needs attention.")
+            elif latest_checkin.overall_status == "watch":
+                score += 10
+                reasons.append("Latest health check-in is in watch mode.")
+            if not plant.primary_geoproof:
+                reasons.append("No GeoPetal proof captured yet.")
+            report.append(
+                {
+                    "plant_id": plant.plant_id,
+                    "plant_name": plant.name,
+                    "priority_score": min(score, 100),
+                    "latest_status": latest.health.status if latest else "no-observations",
+                    "latest_checkin_status": latest_checkin.overall_status if latest_checkin else "no-checkin",
+                    "latest_diagnosis_urgency": latest_diagnosis.urgency if latest_diagnosis else "none",
+                    "recommended_next_step": reasons[0] if reasons else "Keep capturing steady plant history.",
+                    "reasons": reasons[:4],
+                }
+            )
+        report.sort(key=lambda item: int(item.get("priority_score") or 0), reverse=True)
+        return {"generated_at": now_iso(), "season_context": season, "watchlist": report}
+
+    def greenhouse_digest(self) -> Dict[str, Any]:
+        watchlist = self.watchlist_report()
+        activity = self.activity_timeline(limit=12)
+        return {
+            "generated_at": now_iso(),
+            "garden_name": self.state.get("garden", {}).get("name", "Kayla's Garden"),
+            "season_context": self.season_engine.seasonal_context(),
+            "top_watchlist": list(watchlist.get("watchlist") or [])[:5],
+            "recent_activity": list(activity.get("items") or [])[:12],
+            "network_mode": self.network_status(),
+        }
 
     def add_plant(
         self,
@@ -3107,6 +3823,210 @@ class KaylasGardenRuntime:
             "sync_job": asdict(sync_job),
         }
 
+    def list_peer_users(self) -> List[PlantUserPeer]:
+        return [peer_user_from_dict(item) for item in list(self.state.get("peer_users") or []) if isinstance(item, dict)]
+
+    def list_pin_groups(self) -> List[PeerPinGroup]:
+        return [pin_group_from_dict(item) for item in list(self.state.get("pin_groups") or []) if isinstance(item, dict)]
+
+    def _resolve_pin_group(self, group_ref: str) -> Optional[PeerPinGroup]:
+        clean = sanitize_text(group_ref, max_chars=160)
+        if not clean:
+            return None
+        for group in self.list_pin_groups():
+            if group.group_id == clean or group.name.lower() == clean.lower():
+                return group
+        return None
+
+    def add_peer_user(
+        self,
+        *,
+        display_name: str,
+        hive_username: str = "",
+        ipfs_user_id: str = "",
+        pin_group: str = "",
+        notes: str = "",
+    ) -> Dict[str, Any]:
+        peer = PlantUserPeer(
+            peer_id=f"peer-{uuid.uuid4().hex}",
+            created_at=now_iso(),
+            display_name=sanitize_text(display_name, max_chars=160),
+            hive_username=sanitize_text(hive_username, max_chars=80),
+            ipfs_user_id=sanitize_text(ipfs_user_id, max_chars=160),
+            pin_group=sanitize_text(pin_group, max_chars=160),
+            notes=sanitize_text(notes, max_chars=1200),
+            status="active",
+        )
+        self.state.setdefault("peer_users", []).append(asdict(peer))
+        self.save()
+        return {"peer_user": asdict(peer)}
+
+    def create_pin_group(
+        self,
+        *,
+        name: str,
+        description: str = "",
+        privacy_class: str = "shared",
+        tags: Optional[List[str]] = None,
+        member_peer_ids: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        group = PeerPinGroup(
+            group_id=f"group-{uuid.uuid4().hex}",
+            created_at=now_iso(),
+            name=sanitize_text(name, max_chars=160),
+            description=sanitize_text(description, max_chars=2000),
+            privacy_class=normalize_privacy_class(privacy_class),
+            owner_sync_id=self.identity.sync_id,
+            tags=[
+                sanitize_text(item, max_chars=40).lower().replace(" ", "-")
+                for item in list(tags or [])
+                if sanitize_text(item, max_chars=40)
+            ],
+            member_peer_ids=[
+                sanitize_text(item, max_chars=64)
+                for item in list(member_peer_ids or [])
+                if sanitize_text(item, max_chars=64)
+            ],
+        )
+        payload = asdict(group)
+        metadata_asset = self.leafvault.store_json(payload, filename=f"{group.group_id}-pin-group")
+        checkpoint = self.ledger.create_checkpoint("community", metadata_asset.digest, metadata_asset.cid, None)
+        self.ledger.queue(checkpoint)
+        sync_job = self.syncer.queue("community", [metadata_asset.cid] if metadata_asset.cid else [])
+        group.metadata_cid = metadata_asset.cid
+        group.checkpoint_id = checkpoint.checkpoint_id
+        self.state.setdefault("pin_groups", []).append(asdict(group))
+        self.state.setdefault("anchor_queue", []).append(asdict(checkpoint))
+        self.state.setdefault("sync_queue", []).append(asdict(sync_job))
+        self.save()
+        return {
+            "pin_group": asdict(group),
+            "metadata_asset": asdict(metadata_asset),
+            "checkpoint": asdict(checkpoint),
+            "prepared_hive_operation": self.hive.prepare_checkpoint_operation(checkpoint),
+            "sync_job": asdict(sync_job),
+        }
+
+    def post_pin_group_comment(
+        self,
+        *,
+        group_ref: str,
+        body: str,
+        plant_id: str = "",
+        target_cids: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        group = self._resolve_pin_group(group_ref)
+        if group is None:
+            created = self.create_pin_group(name=group_ref or "plant-users", privacy_class="shared")
+            group = pin_group_from_dict(created["pin_group"])
+        comment = PinGroupComment(
+            comment_id=f"comment-{uuid.uuid4().hex}",
+            group_id=group.group_id,
+            created_at=now_iso(),
+            author_sync_id=self.identity.sync_id,
+            author_label=self.identity.display_name,
+            body=sanitize_text(body, max_chars=4000),
+            plant_id=sanitize_text(plant_id, max_chars=64),
+            target_cids=[
+                sanitize_text(item, max_chars=160)
+                for item in list(target_cids or [])
+                if sanitize_text(item, max_chars=160)
+            ],
+        )
+        payload = asdict(comment)
+        payload["group_name"] = group.name
+        metadata_asset = self.leafvault.store_json(payload, filename=f"{group.group_id}-comment")
+        checkpoint = self.ledger.create_checkpoint("community", metadata_asset.digest, metadata_asset.cid, None)
+        self.ledger.queue(checkpoint)
+        sync_job = self.syncer.queue("community", [metadata_asset.cid] if metadata_asset.cid else [])
+        comment.metadata_cid = metadata_asset.cid
+        comment.checkpoint_id = checkpoint.checkpoint_id
+        comment.sync_job_id = sync_job.job_id
+        self.state.setdefault("pin_group_comments", []).append(asdict(comment))
+        self.state.setdefault("anchor_queue", []).append(asdict(checkpoint))
+        self.state.setdefault("sync_queue", []).append(asdict(sync_job))
+        CanopyReputation.record(self.state, self.identity.sync_id, group.privacy_class)
+        self.save()
+        return {
+            "pin_group_comment": asdict(comment),
+            "group": asdict(group),
+            "metadata_asset": asdict(metadata_asset),
+            "checkpoint": asdict(checkpoint),
+            "prepared_hive_comment": self.hive.prepare_group_comment_operation(group_name=group.name, body=comment.body),
+            "sync_job": asdict(sync_job),
+        }
+
+    def request_peer_pin(
+        self,
+        *,
+        group_ref: str,
+        cid: str,
+        target_peer_ids: Optional[List[str]] = None,
+        note: str = "",
+    ) -> Dict[str, Any]:
+        group = self._resolve_pin_group(group_ref)
+        if group is None:
+            created = self.create_pin_group(name=group_ref or "plant-users", privacy_class="shared")
+            group = pin_group_from_dict(created["pin_group"])
+        clean_cid = sanitize_text(cid, max_chars=160)
+        local_pin_status = "queued-local"
+        if clean_cid and self.ipfs.enabled():
+            try:
+                self.ipfs.pin_add(clean_cid)
+                local_pin_status = "pinned-local"
+            except Exception as exc:
+                local_pin_status = f"pin-error:{sanitize_text(exc, max_chars=80)}"
+        request = PeerPinRequest(
+            request_id=f"pinreq-{uuid.uuid4().hex}",
+            group_id=group.group_id,
+            created_at=now_iso(),
+            requester_sync_id=self.identity.sync_id,
+            requester_label=self.identity.display_name,
+            cid=clean_cid,
+            target_peer_ids=[
+                sanitize_text(item, max_chars=64)
+                for item in list(target_peer_ids or [])
+                if sanitize_text(item, max_chars=64)
+            ],
+            note=sanitize_text(note, max_chars=2000),
+            local_pin_status=local_pin_status,
+        )
+        payload = asdict(request)
+        payload["group_name"] = group.name
+        metadata_asset = self.leafvault.store_json(payload, filename=f"{group.group_id}-pin-request")
+        checkpoint = self.ledger.create_checkpoint("community", metadata_asset.digest, metadata_asset.cid, None)
+        self.ledger.queue(checkpoint)
+        sync_job = self.syncer.queue("community", [clean_cid, metadata_asset.cid] if metadata_asset.cid else [clean_cid])
+        request.metadata_cid = metadata_asset.cid
+        request.checkpoint_id = checkpoint.checkpoint_id
+        request.sync_job_id = sync_job.job_id
+        self.state.setdefault("peer_pin_requests", []).append(asdict(request))
+        self.state.setdefault("anchor_queue", []).append(asdict(checkpoint))
+        self.state.setdefault("sync_queue", []).append(asdict(sync_job))
+        self.save()
+        return {
+            "peer_pin_request": asdict(request),
+            "group": asdict(group),
+            "metadata_asset": asdict(metadata_asset),
+            "checkpoint": asdict(checkpoint),
+            "sync_job": asdict(sync_job),
+        }
+
+    def community_summary(self) -> Dict[str, Any]:
+        peers = self.list_peer_users()
+        groups = self.list_pin_groups()
+        comments = [pin_group_comment_from_dict(item) for item in list(self.state.get("pin_group_comments") or []) if isinstance(item, dict)]
+        pin_requests = [peer_pin_request_from_dict(item) for item in list(self.state.get("peer_pin_requests") or []) if isinstance(item, dict)]
+        return {
+            "generated_at": now_iso(),
+            "peer_count": len(peers),
+            "group_count": len(groups),
+            "peers": [asdict(item) for item in peers[-12:]],
+            "groups": [asdict(item) for item in groups[-12:]],
+            "recent_comments": [asdict(item) for item in comments[-12:]],
+            "recent_pin_requests": [asdict(item) for item in pin_requests[-12:]],
+        }
+
     def network_status(self) -> Dict[str, Any]:
         return {
             "mode": {
@@ -3118,8 +4038,10 @@ class KaylasGardenRuntime:
                 "hive_broadcast_enabled": bool(self.settings.get("hive_broadcast_enabled", False)),
             },
             "leafvault": self.leafvault.status(),
+            "ipfs_daemon": self.ipfs_daemon_status(),
             "bloomtrace": self.ledger.status(),
             "rootmesh": self.syncer.status(),
+            "secret_vault": self.network_secret_status(),
             "oqs": self.oqs_advisor.status(),
             "pending_anchor_records": len(list(self.state.get("anchor_queue") or [])),
             "pending_sync_records": len(list(self.state.get("sync_queue") or [])),
@@ -3156,6 +4078,10 @@ class KaylasGardenRuntime:
             "diagnosis_count": len(list(self.state.get("diagnoses") or [])),
             "health_checkin_count": len(list(self.state.get("health_checkins") or [])),
             "shared_technique_count": len(list(self.state.get("shared_techniques") or [])),
+            "peer_user_count": len(list(self.state.get("peer_users") or [])),
+            "pin_group_count": len(list(self.state.get("pin_groups") or [])),
+            "top_watchlist": self.watchlist_report()["watchlist"][:3],
+            "community_summary": self.community_summary(),
             "model_status": self.model_manager.model_status(),
             "network_status": self.network_status(),
         }
@@ -3179,10 +4105,14 @@ if ctk is not None:
             self.care_plant_var = tk.StringVar(value="")
             self.guide_plant_var = tk.StringVar(value="")
             self.lab_plant_var = tk.StringVar(value="")
+            self.community_plant_var = tk.StringVar(value="")
             self.network_mode_var = tk.StringVar(value="local-first")
             self.local_first_var = tk.StringVar(value="on")
             self.cloud_mode_var = tk.StringVar(value="off")
             self.ipfs_enabled_var = tk.StringVar(value="off")
+            self.ipfs_daemon_enabled_var = tk.StringVar(value="off")
+            self.ipfs_daemon_auto_install_var = tk.StringVar(value="off")
+            self.ipfs_daemon_auto_start_var = tk.StringVar(value="off")
             self.hive_enabled_var = tk.StringVar(value="off")
             self.hive_broadcast_var = tk.StringVar(value="off")
 
@@ -3241,7 +4171,9 @@ if ctk is not None:
             self.tabs.add("Observe")
             self.tabs.add("Guide")
             self.tabs.add("Care Lab")
-            self.tabs.add("Network")
+            self.tabs.add("Community")
+            self.tabs.add("Insights")
+            self.tabs.add("Settings")
             self.tabs.add("Models")
 
             self._build_dashboard_tab(self.tabs.tab("Dashboard"))
@@ -3249,7 +4181,9 @@ if ctk is not None:
             self._build_observe_tab(self.tabs.tab("Observe"))
             self._build_guide_tab(self.tabs.tab("Guide"))
             self._build_care_lab_tab(self.tabs.tab("Care Lab"))
-            self._build_network_tab(self.tabs.tab("Network"))
+            self._build_community_tab(self.tabs.tab("Community"))
+            self._build_insights_tab(self.tabs.tab("Insights"))
+            self._build_network_tab(self.tabs.tab("Settings"))
             self._build_models_tab(self.tabs.tab("Models"))
 
         def _build_dashboard_tab(self, tab: Any) -> None:
@@ -3470,16 +4404,115 @@ if ctk is not None:
             self.care_lab_result = ctk.CTkTextbox(right)
             self.care_lab_result.grid(row=8, column=0, padx=18, pady=(0, 18), sticky="nsew")
 
+        def _build_insights_tab(self, tab: Any) -> None:
+            tab.grid_columnconfigure(0, weight=2)
+            tab.grid_columnconfigure(1, weight=3)
+            tab.grid_rowconfigure(0, weight=1)
+
+            left = ctk.CTkFrame(tab)
+            left.grid(row=0, column=0, padx=18, pady=18, sticky="nsew")
+            left.grid_columnconfigure(0, weight=1)
+            left.grid_rowconfigure(1, weight=1)
+            left.grid_rowconfigure(3, weight=1)
+            ctk.CTkLabel(left, text="Garden Digest", font=ctk.CTkFont(size=20, weight="bold")).grid(
+                row=0, column=0, padx=18, pady=(18, 10), sticky="w"
+            )
+            self.insights_digest = ctk.CTkTextbox(left, height=220)
+            self.insights_digest.grid(row=1, column=0, padx=18, pady=(0, 16), sticky="nsew")
+            ctk.CTkLabel(left, text="Watchlist", font=ctk.CTkFont(size=18, weight="bold")).grid(
+                row=2, column=0, padx=18, pady=(0, 10), sticky="w"
+            )
+            self.insights_watchlist = ctk.CTkTextbox(left)
+            self.insights_watchlist.grid(row=3, column=0, padx=18, pady=(0, 18), sticky="nsew")
+
+            right = ctk.CTkFrame(tab)
+            right.grid(row=0, column=1, padx=(0, 18), pady=18, sticky="nsew")
+            right.grid_columnconfigure(0, weight=1)
+            right.grid_rowconfigure(1, weight=1)
+            ctk.CTkLabel(right, text="Activity Timeline", font=ctk.CTkFont(size=20, weight="bold")).grid(
+                row=0, column=0, padx=18, pady=(18, 10), sticky="w"
+            )
+            self.insights_activity = ctk.CTkTextbox(right)
+            self.insights_activity.grid(row=1, column=0, padx=18, pady=(0, 18), sticky="nsew")
+
+        def _build_community_tab(self, tab: Any) -> None:
+            tab.grid_columnconfigure(0, weight=2)
+            tab.grid_columnconfigure(1, weight=3)
+            tab.grid_rowconfigure(0, weight=1)
+
+            left = ctk.CTkFrame(tab)
+            left.grid(row=0, column=0, padx=18, pady=18, sticky="nsew")
+            left.grid_columnconfigure(0, weight=1)
+
+            ctk.CTkLabel(left, text="Peer Gardeners", font=ctk.CTkFont(size=20, weight="bold")).grid(
+                row=0, column=0, padx=18, pady=(18, 10), sticky="w"
+            )
+            self.peer_display_name_entry = ctk.CTkEntry(left, placeholder_text="Display name")
+            self.peer_display_name_entry.grid(row=1, column=0, padx=18, pady=6, sticky="ew")
+            self.peer_hive_username_entry = ctk.CTkEntry(left, placeholder_text="Hive username")
+            self.peer_hive_username_entry.grid(row=2, column=0, padx=18, pady=6, sticky="ew")
+            self.peer_ipfs_user_id_entry = ctk.CTkEntry(left, placeholder_text="IPFS user id or peer label")
+            self.peer_ipfs_user_id_entry.grid(row=3, column=0, padx=18, pady=6, sticky="ew")
+            self.peer_pin_group_entry = ctk.CTkEntry(left, placeholder_text="Preferred pin group")
+            self.peer_pin_group_entry.grid(row=4, column=0, padx=18, pady=6, sticky="ew")
+            self.peer_notes_box = ctk.CTkTextbox(left, height=90)
+            self.peer_notes_box.grid(row=5, column=0, padx=18, pady=6, sticky="ew")
+            self.peer_notes_box.insert("1.0", "Notes about what this plant user likes to pin or comment on.")
+            ctk.CTkButton(left, text="Add Active Plant User", command=self.on_add_peer_user).grid(
+                row=6, column=0, padx=18, pady=(8, 18), sticky="ew"
+            )
+
+            right = ctk.CTkFrame(tab)
+            right.grid(row=0, column=1, padx=(0, 18), pady=18, sticky="nsew")
+            right.grid_columnconfigure(0, weight=1)
+            right.grid_rowconfigure(13, weight=1)
+
+            ctk.CTkLabel(right, text="Pin Group Surface", font=ctk.CTkFont(size=20, weight="bold")).grid(
+                row=0, column=0, padx=18, pady=(18, 10), sticky="w"
+            )
+            self.community_group_name_entry = ctk.CTkEntry(right, placeholder_text="Pin group name")
+            self.community_group_name_entry.grid(row=1, column=0, padx=18, pady=6, sticky="ew")
+            self.community_group_description_box = ctk.CTkTextbox(right, height=90)
+            self.community_group_description_box.grid(row=2, column=0, padx=18, pady=6, sticky="ew")
+            self.community_group_description_box.insert("1.0", "Describe the group purpose, plant types, or pin behavior.")
+            self.community_group_privacy_menu = ctk.CTkOptionMenu(right, values=["private", "shared", "public"])
+            self.community_group_privacy_menu.grid(row=3, column=0, padx=18, pady=6, sticky="ew")
+            ctk.CTkButton(right, text="Create Pin Group", command=self.on_create_pin_group).grid(
+                row=4, column=0, padx=18, pady=(8, 12), sticky="ew"
+            )
+            self.community_post_plant_picker = ctk.CTkOptionMenu(right, variable=self.community_plant_var, values=["No plants yet"])
+            self.community_post_plant_picker.grid(row=5, column=0, padx=18, pady=6, sticky="ew")
+            self.community_target_cids_entry = ctk.CTkEntry(right, placeholder_text="Target CIDs, comma separated")
+            self.community_target_cids_entry.grid(row=6, column=0, padx=18, pady=6, sticky="ew")
+            self.community_comment_box = ctk.CTkTextbox(right, height=100)
+            self.community_comment_box.grid(row=7, column=0, padx=18, pady=6, sticky="ew")
+            self.community_comment_box.insert("1.0", "Comment under this plant user group and point peers at useful plant content.")
+            ctk.CTkButton(right, text="Post Group Comment", command=self.on_post_pin_group_comment).grid(
+                row=8, column=0, padx=18, pady=(8, 12), sticky="ew"
+            )
+            self.community_pin_request_cid_entry = ctk.CTkEntry(right, placeholder_text="CID to hyper-pin")
+            self.community_pin_request_cid_entry.grid(row=9, column=0, padx=18, pady=6, sticky="ew")
+            self.community_pin_request_peers_entry = ctk.CTkEntry(right, placeholder_text="Target peer ids, comma separated")
+            self.community_pin_request_peers_entry.grid(row=10, column=0, padx=18, pady=6, sticky="ew")
+            self.community_pin_request_note_box = ctk.CTkTextbox(right, height=80)
+            self.community_pin_request_note_box.grid(row=11, column=0, padx=18, pady=6, sticky="ew")
+            self.community_pin_request_note_box.insert("1.0", "Why should peers pin this content for faster access?")
+            ctk.CTkButton(right, text="Queue Peer Pin Request", command=self.on_request_peer_pin).grid(
+                row=12, column=0, padx=18, pady=(8, 10), sticky="ew"
+            )
+            self.community_result = ctk.CTkTextbox(right)
+            self.community_result.grid(row=13, column=0, padx=18, pady=(0, 18), sticky="nsew")
+
         def _build_network_tab(self, tab: Any) -> None:
             tab.grid_columnconfigure(0, weight=2)
             tab.grid_columnconfigure(1, weight=3)
-            tab.grid_rowconfigure(1, weight=1)
+            tab.grid_rowconfigure(0, weight=1)
 
             settings_frame = ctk.CTkFrame(tab)
-            settings_frame.grid(row=0, column=0, rowspan=2, padx=18, pady=18, sticky="nsew")
+            settings_frame.grid(row=0, column=0, padx=18, pady=18, sticky="nsew")
             settings_frame.grid_columnconfigure(0, weight=1)
 
-            ctk.CTkLabel(settings_frame, text="Runtime Settings", font=ctk.CTkFont(size=20, weight="bold")).grid(
+            ctk.CTkLabel(settings_frame, text="Garden Settings", font=ctk.CTkFont(size=20, weight="bold")).grid(
                 row=0, column=0, padx=18, pady=(18, 14), sticky="w"
             )
             self.location_entry = ctk.CTkEntry(settings_frame, placeholder_text="Garden location")
@@ -3498,29 +4531,83 @@ if ctk is not None:
             self.ipfs_entry.grid(row=7, column=0, padx=18, pady=6, sticky="ew")
             self.ipfs_root_entry = ctk.CTkEntry(settings_frame, placeholder_text="IPFS MFS root")
             self.ipfs_root_entry.grid(row=8, column=0, padx=18, pady=6, sticky="ew")
+            ctk.CTkLabel(settings_frame, text="Encrypted Network Vault", font=ctk.CTkFont(size=18, weight="bold")).grid(
+                row=9, column=0, padx=18, pady=(16, 8), sticky="w"
+            )
+            self.secret_ipfs_user_id_entry = ctk.CTkEntry(settings_frame, placeholder_text="IPFS user id")
+            self.secret_ipfs_user_id_entry.grid(row=10, column=0, padx=18, pady=6, sticky="ew")
+            self.secret_ipfs_pin_surface_entry = ctk.CTkEntry(settings_frame, placeholder_text="Pin surface or service")
+            self.secret_ipfs_pin_surface_entry.grid(row=11, column=0, padx=18, pady=6, sticky="ew")
+            self.secret_ipfs_pin_surface_token_entry = ctk.CTkEntry(settings_frame, placeholder_text="Pin surface token", show="*")
+            self.secret_ipfs_pin_surface_token_entry.grid(row=12, column=0, padx=18, pady=6, sticky="ew")
+            self.secret_hive_username_entry = ctk.CTkEntry(settings_frame, placeholder_text="Hive username")
+            self.secret_hive_username_entry.grid(row=13, column=0, padx=18, pady=6, sticky="ew")
+            self.secret_hive_posting_key_entry = ctk.CTkEntry(settings_frame, placeholder_text="Hive posting key", show="*")
+            self.secret_hive_posting_key_entry.grid(row=14, column=0, padx=18, pady=6, sticky="ew")
+            ctk.CTkButton(settings_frame, text="Save Encrypted Credentials", command=self.on_save_network_secrets).grid(
+                row=15, column=0, padx=18, pady=(8, 16), sticky="ew"
+            )
+            ctk.CTkLabel(settings_frame, text="Managed IPFS Daemon", font=ctk.CTkFont(size=18, weight="bold")).grid(
+                row=16, column=0, padx=18, pady=(0, 8), sticky="w"
+            )
+            self.ipfs_daemon_enabled_menu = ctk.CTkOptionMenu(settings_frame, variable=self.ipfs_daemon_enabled_var, values=["off", "on"])
+            self.ipfs_daemon_enabled_menu.grid(row=17, column=0, padx=18, pady=6, sticky="ew")
+            self.ipfs_daemon_auto_install_menu = ctk.CTkOptionMenu(settings_frame, variable=self.ipfs_daemon_auto_install_var, values=["off", "on"])
+            self.ipfs_daemon_auto_install_menu.grid(row=18, column=0, padx=18, pady=6, sticky="ew")
+            self.ipfs_daemon_auto_start_menu = ctk.CTkOptionMenu(settings_frame, variable=self.ipfs_daemon_auto_start_var, values=["off", "on"])
+            self.ipfs_daemon_auto_start_menu.grid(row=19, column=0, padx=18, pady=6, sticky="ew")
+            self.ipfs_daemon_binary_entry = ctk.CTkEntry(settings_frame, placeholder_text="Existing ipfs binary path (optional)")
+            self.ipfs_daemon_binary_entry.grid(row=20, column=0, padx=18, pady=6, sticky="ew")
+            self.ipfs_daemon_repo_entry = ctk.CTkEntry(settings_frame, placeholder_text="Managed IPFS repo path")
+            self.ipfs_daemon_repo_entry.grid(row=21, column=0, padx=18, pady=6, sticky="ew")
+            self.ipfs_kubo_version_entry = ctk.CTkEntry(settings_frame, placeholder_text="Kubo version for managed install, e.g. vX.Y.Z")
+            self.ipfs_kubo_version_entry.grid(row=22, column=0, padx=18, pady=6, sticky="ew")
+            self.ipfs_kubo_url_entry = ctk.CTkEntry(settings_frame, placeholder_text="Custom Kubo tarball URL (optional)")
+            self.ipfs_kubo_url_entry.grid(row=23, column=0, padx=18, pady=6, sticky="ew")
+            daemon_buttons = ctk.CTkFrame(settings_frame, fg_color="transparent")
+            daemon_buttons.grid(row=24, column=0, padx=18, pady=(6, 16), sticky="ew")
+            daemon_buttons.grid_columnconfigure(0, weight=1)
+            daemon_buttons.grid_columnconfigure(1, weight=1)
+            daemon_buttons.grid_columnconfigure(2, weight=1)
+            ctk.CTkButton(daemon_buttons, text="Install Kubo", command=self.on_install_ipfs_daemon).grid(row=0, column=0, padx=(0, 6), sticky="ew")
+            ctk.CTkButton(daemon_buttons, text="Start Daemon", command=self.on_start_ipfs_daemon).grid(row=0, column=1, padx=6, sticky="ew")
+            ctk.CTkButton(daemon_buttons, text="Stop Daemon", command=self.on_stop_ipfs_daemon).grid(row=0, column=2, padx=(6, 0), sticky="ew")
+            ctk.CTkLabel(settings_frame, text="Hive Anchoring", font=ctk.CTkFont(size=18, weight="bold")).grid(
+                row=25, column=0, padx=18, pady=(0, 8), sticky="w"
+            )
             self.hive_enabled_menu = ctk.CTkOptionMenu(settings_frame, variable=self.hive_enabled_var, values=["off", "on"])
-            self.hive_enabled_menu.grid(row=9, column=0, padx=18, pady=6, sticky="ew")
+            self.hive_enabled_menu.grid(row=26, column=0, padx=18, pady=6, sticky="ew")
             self.hive_entry = ctk.CTkEntry(settings_frame, placeholder_text="Hive RPC")
-            self.hive_entry.grid(row=10, column=0, padx=18, pady=6, sticky="ew")
-            self.hive_account_entry = ctk.CTkEntry(settings_frame, placeholder_text="Hive account for posting ops")
-            self.hive_account_entry.grid(row=11, column=0, padx=18, pady=6, sticky="ew")
+            self.hive_entry.grid(row=27, column=0, padx=18, pady=6, sticky="ew")
             self.hive_broadcast_menu = ctk.CTkOptionMenu(settings_frame, variable=self.hive_broadcast_var, values=["off", "on"])
-            self.hive_broadcast_menu.grid(row=12, column=0, padx=18, pady=6, sticky="ew")
+            self.hive_broadcast_menu.grid(row=28, column=0, padx=18, pady=6, sticky="ew")
             self.nodes_entry = ctk.CTkEntry(settings_frame, placeholder_text="Trusted nodes, comma separated")
-            self.nodes_entry.grid(row=13, column=0, padx=18, pady=6, sticky="ew")
+            self.nodes_entry.grid(row=29, column=0, padx=18, pady=6, sticky="ew")
             ctk.CTkButton(settings_frame, text="Save Settings", command=self.on_save_settings).grid(
-                row=14, column=0, padx=18, pady=(10, 18), sticky="ew"
+                row=30, column=0, padx=18, pady=(10, 18), sticky="ew"
             )
 
             queue_frame = ctk.CTkFrame(tab)
-            queue_frame.grid(row=0, column=1, rowspan=2, padx=(0, 18), pady=18, sticky="nsew")
+            queue_frame.grid(row=0, column=1, padx=(0, 18), pady=18, sticky="nsew")
             queue_frame.grid_columnconfigure(0, weight=1)
             queue_frame.grid_rowconfigure(1, weight=1)
-            ctk.CTkLabel(queue_frame, text="Queue + Publishing State", font=ctk.CTkFont(size=20, weight="bold")).grid(
+            queue_frame.grid_rowconfigure(3, weight=1)
+            queue_frame.grid_rowconfigure(5, weight=1)
+            ctk.CTkLabel(queue_frame, text="Managed IPFS Status", font=ctk.CTkFont(size=20, weight="bold")).grid(
                 row=0, column=0, padx=18, pady=(18, 10), sticky="w"
             )
+            self.daemon_status_text = ctk.CTkTextbox(queue_frame, height=220)
+            self.daemon_status_text.grid(row=1, column=0, padx=18, pady=(0, 16), sticky="nsew")
+            ctk.CTkLabel(queue_frame, text="Encrypted Credential Status", font=ctk.CTkFont(size=18, weight="bold")).grid(
+                row=2, column=0, padx=18, pady=(0, 10), sticky="w"
+            )
+            self.secret_status_text = ctk.CTkTextbox(queue_frame, height=180)
+            self.secret_status_text.grid(row=3, column=0, padx=18, pady=(0, 16), sticky="nsew")
+            ctk.CTkLabel(queue_frame, text="Queue + Publishing State", font=ctk.CTkFont(size=18, weight="bold")).grid(
+                row=4, column=0, padx=18, pady=(0, 10), sticky="w"
+            )
             self.network_queue = ctk.CTkTextbox(queue_frame)
-            self.network_queue.grid(row=1, column=0, padx=18, pady=(0, 18), sticky="nsew")
+            self.network_queue.grid(row=5, column=0, padx=18, pady=(0, 18), sticky="nsew")
 
         def _build_models_tab(self, tab: Any) -> None:
             tab.grid_columnconfigure(0, weight=1)
@@ -3591,6 +4678,7 @@ if ctk is not None:
                     f"Sync queue: {summary['sync_queue_depth']}\n"
                     f"Diagnoses: {summary['diagnosis_count']}\n"
                     f"Check-ins: {summary['health_checkin_count']}\n"
+                    f"IPFS daemon: {summary['network_status']['ipfs_daemon']['running']}\n"
                     f"LiteRT installed: {summary['model_status']['litert_installed']}\n"
                     f"Model present: {summary['model_status']['installed']}"
                 ),
@@ -3599,6 +4687,12 @@ if ctk is not None:
             self._set_text(self.dashboard_queue, self._queue_text())
             self._set_text(self.plants_text, self._plants_text())
             self._set_text(self.network_queue, json.dumps(self.runtime.network_status(), indent=2, ensure_ascii=True))
+            self._set_text(self.daemon_status_text, json.dumps(self.runtime.ipfs_daemon_status(), indent=2, ensure_ascii=True))
+            self._set_text(self.secret_status_text, json.dumps(self.runtime.network_secret_status(), indent=2, ensure_ascii=True))
+            self._set_text(self.community_result, json.dumps(self.runtime.community_summary(), indent=2, ensure_ascii=True))
+            self._set_text(self.insights_digest, json.dumps(self.runtime.greenhouse_digest(), indent=2, ensure_ascii=True))
+            self._set_text(self.insights_watchlist, json.dumps(self.runtime.watchlist_report(), indent=2, ensure_ascii=True))
+            self._set_text(self.insights_activity, json.dumps(self.runtime.activity_timeline(), indent=2, ensure_ascii=True))
             self._set_text(
                 self.models_text,
                 json.dumps(
@@ -3651,11 +4745,13 @@ if ctk is not None:
             self.care_picker.configure(values=values)
             self.guide_picker.configure(values=values)
             self.lab_picker.configure(values=values)
+            self.community_post_plant_picker.configure(values=values)
             if values[0] == "No plants yet":
                 self.observe_plant_var.set(values[0])
                 self.care_plant_var.set(values[0])
                 self.guide_plant_var.set(values[0])
                 self.lab_plant_var.set(values[0])
+                self.community_plant_var.set(values[0])
             else:
                 if self.observe_plant_var.get() not in lookup:
                     self.observe_plant_var.set(values[0])
@@ -3665,13 +4761,19 @@ if ctk is not None:
                     self.guide_plant_var.set(values[0])
                 if self.lab_plant_var.get() not in lookup:
                     self.lab_plant_var.set(values[0])
+                if self.community_plant_var.get() not in lookup:
+                    self.community_plant_var.set(values[0])
 
         def _sync_settings_fields(self) -> None:
             settings = self.runtime.settings
+            secrets = self.runtime.secret_settings
             self.network_mode_var.set(normalize_network_mode(settings.get("network_mode")))
             self.local_first_var.set("on" if bool(settings.get("local_first_only", True)) else "off")
             self.cloud_mode_var.set("on" if bool(settings.get("cloud_mode", False)) else "off")
             self.ipfs_enabled_var.set("on" if bool(settings.get("ipfs_enabled", False)) else "off")
+            self.ipfs_daemon_enabled_var.set("on" if bool(settings.get("ipfs_daemon_enabled", False)) else "off")
+            self.ipfs_daemon_auto_install_var.set("on" if bool(settings.get("ipfs_daemon_auto_install", False)) else "off")
+            self.ipfs_daemon_auto_start_var.set("on" if bool(settings.get("ipfs_daemon_auto_start", False)) else "off")
             self.hive_enabled_var.set("on" if bool(settings.get("hive_enabled", False)) else "off")
             self.hive_broadcast_var.set("on" if bool(settings.get("hive_broadcast_enabled", False)) else "off")
             for entry, value in (
@@ -3679,9 +4781,17 @@ if ctk is not None:
                 (self.theme_entry, settings.get("theme") or ""),
                 (self.ipfs_entry, settings.get("ipfs_api") or ""),
                 (self.ipfs_root_entry, settings.get("ipfs_mfs_root") or ""),
+                (self.ipfs_daemon_binary_entry, settings.get("ipfs_daemon_binary") or ""),
+                (self.ipfs_daemon_repo_entry, settings.get("ipfs_daemon_repo") or ""),
+                (self.ipfs_kubo_version_entry, settings.get("ipfs_kubo_version") or ""),
+                (self.ipfs_kubo_url_entry, settings.get("ipfs_kubo_download_url") or ""),
                 (self.hive_entry, settings.get("hive_api") or ""),
-                (self.hive_account_entry, settings.get("hive_account") or ""),
                 (self.nodes_entry, ", ".join(settings.get("trusted_nodes") or [])),
+                (self.secret_ipfs_user_id_entry, secrets.get("ipfs_user_id") or ""),
+                (self.secret_ipfs_pin_surface_entry, secrets.get("ipfs_pin_surface") or ""),
+                (self.secret_ipfs_pin_surface_token_entry, secrets.get("ipfs_pin_surface_token") or secrets.get("ipfs_bearer_token") or ""),
+                (self.secret_hive_username_entry, secrets.get("hive_username") or ""),
+                (self.secret_hive_posting_key_entry, secrets.get("hive_posting_key") or ""),
             ):
                 entry.delete(0, "end")
                 entry.insert(0, value)
@@ -3870,7 +4980,125 @@ if ctk is not None:
             self.refresh_all()
             self.status_var.set("Care lab action completed and queued for local-first sync.")
 
-        def on_save_settings(self) -> None:
+        def on_install_ipfs_daemon(self) -> None:
+            self.on_save_settings(show_dialog=False, refresh=False)
+            self._run_worker(
+                lambda: self.runtime.install_ipfs_daemon(),
+                lambda result: self._after_action(f"Managed IPFS install finished.\n{json.dumps(result, indent=2, ensure_ascii=True)}"),
+                status="Installing managed Kubo into the garden runtime...",
+            )
+
+        def on_save_network_secrets(self) -> None:
+            secrets = {
+                "ipfs_user_id": sanitize_text(self.secret_ipfs_user_id_entry.get(), max_chars=160),
+                "ipfs_pin_surface": sanitize_text(self.secret_ipfs_pin_surface_entry.get(), max_chars=160),
+                "ipfs_pin_surface_token": sanitize_text(self.secret_ipfs_pin_surface_token_entry.get(), max_chars=400),
+                "ipfs_bearer_token": sanitize_text(self.secret_ipfs_pin_surface_token_entry.get(), max_chars=400),
+                "hive_username": sanitize_text(self.secret_hive_username_entry.get(), max_chars=80),
+                "hive_posting_key": sanitize_text(self.secret_hive_posting_key_entry.get(), max_chars=800),
+            }
+            self._run_worker(
+                lambda: self.runtime.save_network_secrets(secrets),
+                lambda result: self._after_action(f"Encrypted credentials saved.\n{json.dumps(result, indent=2, ensure_ascii=True)}"),
+                status="Sealing network credentials into the AES-GCM secret vault...",
+            )
+
+        def on_add_peer_user(self) -> None:
+            display_name = sanitize_text(self.peer_display_name_entry.get(), max_chars=160)
+            if not display_name:
+                messagebox.showwarning("Kayla's Garden", "Enter a peer display name first.")
+                return
+            self._run_worker(
+                lambda: self.runtime.add_peer_user(
+                    display_name=display_name,
+                    hive_username=sanitize_text(self.peer_hive_username_entry.get(), max_chars=80),
+                    ipfs_user_id=sanitize_text(self.peer_ipfs_user_id_entry.get(), max_chars=160),
+                    pin_group=sanitize_text(self.peer_pin_group_entry.get(), max_chars=160),
+                    notes=sanitize_text(self.peer_notes_box.get("1.0", "end"), max_chars=1200),
+                ),
+                self._after_community_action,
+                status="Adding active plant user to the community graph...",
+            )
+
+        def on_create_pin_group(self) -> None:
+            group_name = sanitize_text(self.community_group_name_entry.get(), max_chars=160)
+            if not group_name:
+                messagebox.showwarning("Kayla's Garden", "Enter a pin group name first.")
+                return
+            description = sanitize_text(self.community_group_description_box.get("1.0", "end"), max_chars=2000)
+            self._run_worker(
+                lambda: self.runtime.create_pin_group(
+                    name=group_name,
+                    description=description,
+                    privacy_class=self.community_group_privacy_menu.get(),
+                    tags=[item.strip() for item in group_name.lower().split() if item.strip()],
+                ),
+                self._after_community_action,
+                status="Creating community pin group...",
+            )
+
+        def on_post_pin_group_comment(self) -> None:
+            group_ref = sanitize_text(self.community_group_name_entry.get(), max_chars=160)
+            if not group_ref:
+                messagebox.showwarning("Kayla's Garden", "Enter a pin group name first.")
+                return
+            body = sanitize_text(self.community_comment_box.get("1.0", "end"), max_chars=4000)
+            if not body:
+                messagebox.showwarning("Kayla's Garden", "Enter a community comment first.")
+                return
+            plant_id = self._selected_plant_id(self.community_plant_var) or ""
+            target_cids = [item.strip() for item in self.community_target_cids_entry.get().split(",") if item.strip()]
+            self._run_worker(
+                lambda: self.runtime.post_pin_group_comment(
+                    group_ref=group_ref,
+                    body=body,
+                    plant_id=plant_id,
+                    target_cids=target_cids,
+                ),
+                self._after_community_action,
+                status="Posting community group comment and preparing sync payloads...",
+            )
+
+        def on_request_peer_pin(self) -> None:
+            group_ref = sanitize_text(self.community_group_name_entry.get(), max_chars=160)
+            cid = sanitize_text(self.community_pin_request_cid_entry.get(), max_chars=160)
+            if not group_ref or not cid:
+                messagebox.showwarning("Kayla's Garden", "Enter both a pin group and a CID first.")
+                return
+            target_peer_ids = [item.strip() for item in self.community_pin_request_peers_entry.get().split(",") if item.strip()]
+            note = sanitize_text(self.community_pin_request_note_box.get("1.0", "end"), max_chars=2000)
+            self._run_worker(
+                lambda: self.runtime.request_peer_pin(
+                    group_ref=group_ref,
+                    cid=cid,
+                    target_peer_ids=target_peer_ids,
+                    note=note,
+                ),
+                self._after_community_action,
+                status="Queueing peer pin acceleration request...",
+            )
+
+        def _after_community_action(self, result: Any) -> None:
+            self._set_text(self.community_result, json.dumps(result, indent=2, ensure_ascii=True))
+            self.refresh_all()
+            self.status_var.set("Community action completed and queued for local-first sync.")
+
+        def on_start_ipfs_daemon(self) -> None:
+            self.on_save_settings(show_dialog=False, refresh=False)
+            self._run_worker(
+                lambda: self.runtime.start_ipfs_daemon(),
+                lambda result: self._after_action(f"Managed IPFS daemon status:\n{json.dumps(result, indent=2, ensure_ascii=True)}"),
+                status="Starting managed IPFS daemon...",
+            )
+
+        def on_stop_ipfs_daemon(self) -> None:
+            self._run_worker(
+                lambda: self.runtime.stop_ipfs_daemon(),
+                lambda result: self._after_action(f"Managed IPFS daemon status:\n{json.dumps(result, indent=2, ensure_ascii=True)}"),
+                status="Stopping managed IPFS daemon...",
+            )
+
+        def on_save_settings(self, *, show_dialog: bool = False, refresh: bool = True) -> None:
             local_first_only = self.local_first_var.get() == "on"
             cloud_mode = self.cloud_mode_var.get() == "on" and not local_first_only
             settings = {
@@ -3882,17 +5110,26 @@ if ctk is not None:
                 "ipfs_enabled": self.ipfs_enabled_var.get() == "on" and cloud_mode,
                 "ipfs_api": sanitize_text(self.ipfs_entry.get(), max_chars=240),
                 "ipfs_mfs_root": sanitize_text(self.ipfs_root_entry.get() or "/kaylas-garden", max_chars=240),
+                "ipfs_daemon_enabled": self.ipfs_daemon_enabled_var.get() == "on",
+                "ipfs_daemon_auto_install": self.ipfs_daemon_auto_install_var.get() == "on",
+                "ipfs_daemon_auto_start": self.ipfs_daemon_auto_start_var.get() == "on",
+                "ipfs_daemon_binary": sanitize_text(self.ipfs_daemon_binary_entry.get(), max_chars=400),
+                "ipfs_daemon_repo": sanitize_text(self.ipfs_daemon_repo_entry.get() or str(self.runtime.paths.ipfs_repo_dir), max_chars=400),
+                "ipfs_kubo_version": sanitize_text(self.ipfs_kubo_version_entry.get(), max_chars=80),
+                "ipfs_kubo_download_url": sanitize_text(self.ipfs_kubo_url_entry.get(), max_chars=400),
                 "hive_enabled": self.hive_enabled_var.get() == "on" and cloud_mode,
                 "hive_api": sanitize_text(self.hive_entry.get(), max_chars=240),
-                "hive_account": sanitize_text(self.hive_account_entry.get(), max_chars=80),
                 "hive_broadcast_enabled": self.hive_broadcast_var.get() == "on" and cloud_mode,
                 "trusted_nodes": [item.strip() for item in self.nodes_entry.get().split(",") if item.strip()],
             }
             save_settings(settings, self.runtime.paths)
             self.runtime.reload_settings()
             self.runtime.save()
-            self.refresh_all()
+            if refresh:
+                self.refresh_all()
             self.status_var.set("Runtime settings saved.")
+            if show_dialog:
+                messagebox.showinfo("Kayla's Garden", "Runtime settings saved.")
 
         def on_verify_model(self) -> None:
             self._run_worker(
@@ -3977,7 +5214,51 @@ def build_arg_parser() -> argparse.ArgumentParser:
     technique.add_argument("--tags", default="", help="Comma-separated technique tags")
     technique.add_argument("--privacy", default=None)
 
+    secret_status = subparsers.add_parser("secret-status", help="Show encrypted network secret vault status")
+    _ = secret_status
+    save_secrets = subparsers.add_parser("save-network-secrets", help="Save IPFS/Hive identities into the encrypted AES-GCM secret vault")
+    save_secrets.add_argument("--ipfs-user-id", default="")
+    save_secrets.add_argument("--ipfs-pin-surface", default="")
+    save_secrets.add_argument("--ipfs-pin-surface-token", default="")
+    save_secrets.add_argument("--hive-username", default="")
+    save_secrets.add_argument("--hive-posting-key", default="")
+
+    subparsers.add_parser("community-summary", help="Show peer users, pin groups, comments, and co-pin requests")
+    add_peer = subparsers.add_parser("add-peer-user", help="Add an active peer plant user")
+    add_peer.add_argument("--display-name", required=True)
+    add_peer.add_argument("--hive-username", default="")
+    add_peer.add_argument("--ipfs-user-id", default="")
+    add_peer.add_argument("--pin-group", default="")
+    add_peer.add_argument("--notes", default="")
+
+    create_group = subparsers.add_parser("create-pin-group", help="Create a shared pin group")
+    create_group.add_argument("--name", required=True)
+    create_group.add_argument("--description", default="")
+    create_group.add_argument("--privacy", default="shared")
+    create_group.add_argument("--tags", default="")
+    create_group.add_argument("--member-peer-ids", default="")
+
+    post_group = subparsers.add_parser("post-pin-group", help="Post a comment under a plant-user pin group")
+    post_group.add_argument("--group", required=True)
+    post_group.add_argument("--body", required=True)
+    post_group.add_argument("--plant-id", default="")
+    post_group.add_argument("--cids", default="")
+
+    request_pin = subparsers.add_parser("request-peer-pin", help="Ask peer plant users to co-pin a CID")
+    request_pin.add_argument("--group", required=True)
+    request_pin.add_argument("--cid", required=True)
+    request_pin.add_argument("--target-peer-ids", default="")
+    request_pin.add_argument("--note", default="")
+
+    subparsers.add_parser("activity", help="Show recent plant activity across observations, diagnoses, check-ins, and techniques")
+    subparsers.add_parser("watchlist", help="Show the current garden watchlist and triage priorities")
+    subparsers.add_parser("garden-digest", help="Show the current garden digest with watchlist and recent activity")
+
     subparsers.add_parser("network-status", help="Show local-first/cloud network state, IPFS, Hive, and OQS status")
+    subparsers.add_parser("ipfs-daemon-status", help="Show managed IPFS daemon status")
+    subparsers.add_parser("ipfs-daemon-install", help="Install the managed IPFS daemon if enabled in settings")
+    subparsers.add_parser("ipfs-daemon-start", help="Start the managed IPFS daemon if enabled in settings")
+    subparsers.add_parser("ipfs-daemon-stop", help="Stop the managed IPFS daemon")
     subparsers.add_parser("oqs-status", help="Show OQS repos, pip requirements, build script, and available mechanisms")
     oqs_search = subparsers.add_parser("oqs-search", help="Search OQS KEM/signature mechanisms")
     oqs_search.add_argument("--query", default="")
@@ -4084,8 +5365,105 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
         return 0
 
+    if args.command == "secret-status":
+        print_json(runtime.network_secret_status())
+        return 0
+
+    if args.command == "save-network-secrets":
+        print_json(
+            runtime.save_network_secrets(
+                {
+                    "ipfs_user_id": args.ipfs_user_id,
+                    "ipfs_pin_surface": args.ipfs_pin_surface,
+                    "ipfs_pin_surface_token": args.ipfs_pin_surface_token,
+                    "ipfs_bearer_token": args.ipfs_pin_surface_token,
+                    "hive_username": args.hive_username,
+                    "hive_posting_key": args.hive_posting_key,
+                }
+            )
+        )
+        return 0
+
+    if args.command == "community-summary":
+        print_json(runtime.community_summary())
+        return 0
+
+    if args.command == "add-peer-user":
+        print_json(
+            runtime.add_peer_user(
+                display_name=args.display_name,
+                hive_username=args.hive_username,
+                ipfs_user_id=args.ipfs_user_id,
+                pin_group=args.pin_group,
+                notes=args.notes,
+            )
+        )
+        return 0
+
+    if args.command == "create-pin-group":
+        print_json(
+            runtime.create_pin_group(
+                name=args.name,
+                description=args.description,
+                privacy_class=args.privacy,
+                tags=[item.strip() for item in args.tags.split(",") if item.strip()],
+                member_peer_ids=[item.strip() for item in args.member_peer_ids.split(",") if item.strip()],
+            )
+        )
+        return 0
+
+    if args.command == "post-pin-group":
+        print_json(
+            runtime.post_pin_group_comment(
+                group_ref=args.group,
+                body=args.body,
+                plant_id=args.plant_id,
+                target_cids=[item.strip() for item in args.cids.split(",") if item.strip()],
+            )
+        )
+        return 0
+
+    if args.command == "request-peer-pin":
+        print_json(
+            runtime.request_peer_pin(
+                group_ref=args.group,
+                cid=args.cid,
+                target_peer_ids=[item.strip() for item in args.target_peer_ids.split(",") if item.strip()],
+                note=args.note,
+            )
+        )
+        return 0
+
+    if args.command == "activity":
+        print_json(runtime.activity_timeline())
+        return 0
+
+    if args.command == "watchlist":
+        print_json(runtime.watchlist_report())
+        return 0
+
+    if args.command == "garden-digest":
+        print_json(runtime.greenhouse_digest())
+        return 0
+
     if args.command == "network-status":
         print_json(runtime.network_status())
+        return 0
+
+    if args.command == "ipfs-daemon-status":
+        print_json(runtime.ipfs_daemon_status())
+        return 0
+
+    if args.command == "ipfs-daemon-install":
+        print_json(runtime.install_ipfs_daemon())
+        return 0
+
+    if args.command == "ipfs-daemon-start":
+        print_json(runtime.start_ipfs_daemon())
+        return 0
+
+    if args.command == "ipfs-daemon-stop":
+        print_json(runtime.stop_ipfs_daemon())
         return 0
 
     if args.command == "oqs-status":
