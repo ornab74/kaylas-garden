@@ -234,59 +234,57 @@ python3 main.py --root /tmp/kaylas-garden-dev
 
 ### screen1
 
-![screen1 Dashboard](./screen1.png)
+![screen1 Models](./screen1.png)
 
-`screen1` is the Dashboard.
+`screen1` is Models.
 
-This is the control-room view for the garden:
+This is the local AI operations panel:
 
-- garden summary
-- queue depth
-- sync identity snapshot
-- quick status of local-first, model, and network subsystems
+- LiteRT-LM status
+- Gemma 4 model verification
+- model download state
+- OQS status visibility
 
 ### screen2
 
-![screen2 Plants](./screen2.png)
+![screen2 Settings](./screen2.png)
 
-`screen2` is Plants.
+`screen2` is Settings.
 
-This is where users create and review plant passports:
+This is where the secure transport and daemon controls live:
 
-- plant name and species
-- hardiness zone
-- privacy class
-- care profile summary
-- latest status and observation count
+- encrypted AES-GCM network vault
+- IPFS user id and pin surface credentials
+- Hive username and posting key storage
+- managed Kubo install, start, and stop controls
+- cloud-mode gating
 
 ### screen3
 
-![screen3 Observe](./screen3.png)
+![screen3 Insights](./screen3.png)
 
-`screen3` is Observe.
+`screen3` is Insights.
 
-This is the ingestion point for new plant evidence:
+This is the operational intelligence workboard:
 
-- note entry
-- GPS capture
-- image selection
-- manual tags
-- plant profile refresh
-- LeafVault storage and checkpoint queueing
+- watchlist ranking
+- recent activity timeline
+- greenhouse digest
+- cross-plant triage view
 
 ### screen4
 
-![screen4 Guide](./screen4.png)
+![screen4 Community](./screen4.png)
 
-`screen4` is Guide.
+`screen4` is Community.
 
-This is the long-context "Chat With A Plant" surface:
+This is the cooperative plant-user and pin-group surface:
 
-- uses plant passport data
-- uses prior observations
-- uses health check-ins
-- uses shared techniques
-- can compare with current or historical plant images
+- active peer plant users
+- pin groups
+- group comments
+- peer co-pin requests
+- local-first metadata publishing for shared plant access
 
 ### screen5
 
@@ -303,72 +301,74 @@ This is the structured plant intervention workspace:
 
 ### screen6
 
-![screen6 Community](./screen6.png)
+![screen6 Guide](./screen6.png)
 
-`screen6` is Community.
+`screen6` is Guide.
 
-This is the cooperative plant-user and pin-group surface:
+This is the long-context "Chat With A Plant" surface:
 
-- active peer plant users
-- pin groups
-- group comments
-- peer co-pin requests
-- local-first metadata publishing for shared plant access
+- uses plant passport data
+- uses prior observations
+- uses health check-ins
+- uses shared techniques
+- can compare with current or historical plant images
 
 ### screen7
 
-![screen7 Insights](./screen7.png)
+![screen7 Observe](./screen7.png)
 
-`screen7` is Insights.
+`screen7` is Observe.
 
-This is the operational intelligence workboard:
+This is the ingestion point for new plant evidence:
 
-- watchlist ranking
-- recent activity timeline
-- greenhouse digest
-- cross-plant triage view
+- note entry
+- GPS capture
+- image selection
+- manual tags
+- plant profile refresh
+- LeafVault storage and checkpoint queueing
 
 ### screen8
 
-![screen8 Settings](./screen8.png)
+![screen8 Plants](./screen8.png)
 
-`screen8` is Settings.
+`screen8` is Plants.
 
-This is where the secure transport and daemon controls live:
+This is where users create and review plant passports:
 
-- encrypted AES-GCM network vault
-- IPFS user id and pin surface credentials
-- Hive username and posting key storage
-- managed Kubo install, start, and stop controls
-- cloud-mode gating
+- plant name and species
+- hardiness zone
+- privacy class
+- care profile summary
+- latest status and observation count
 
 ### screen9
 
-![screen9 Models](./screen9.png)
+![screen9 Dashboard](./screen9.png)
 
-`screen9` is Models.
+`screen9` is the Dashboard.
 
-This is the local AI operations panel:
+This is the control-room view for the garden:
 
-- LiteRT-LM status
-- Gemma 4 model verification
-- model download state
-- OQS status visibility
+- garden summary
+- queue depth
+- sync identity snapshot
+- quick status of local-first, model, and network subsystems
 
 ## How It Works
 
 ```mermaid
 flowchart LR
     subgraph UI[Desktop Screens]
-        S1[screen1 Dashboard]
-        S2[screen2 Plants]
-        S3[screen3 Observe]
-        S4[screen4 Guide]
+        S1[screen1 Models]
+        S2[screen2 Settings]
+        S3[screen3 Insights]
+        S4[screen4 Community]
         S5[screen5 Care Lab]
-        S6[screen6 Community]
-        S7[screen7 Insights]
-        S8[screen8 Settings]
-        S9[screen9 Models]
+        S6[screen6 Guide]
+        S7[screen7 Observe]
+        S8[screen8 Plants]
+        S9[screen9 Dashboard]
     end
 
     subgraph Core[Kayla's Garden Runtime]
