@@ -1,402 +1,344 @@
-# 🌱 Kayla's Garden
+# Kayla's Garden
 
-A personal plant-tracking website to catalog plants, upload progress photos, track frost dates, and browse an AI-powered plant library.
+Kayla's Garden is now a single-file Python `customtkinter` desktop runtime centered on local-first plant intelligence.
 
-## Features
+The core app lives in [main.py](./main.py). It tracks plant passports, observations, health records, diagnosis notes, shared techniques, LiteRT-LM prompt flows, encrypted local storage, optional IPFS publishing, optional Hive checkpoint preparation, and optional OQS post-quantum guidance.
 
-- **🌿 Plant Dashboard** — View all your tracked plants as cards with thumbnails, species info, and progress counts
-- **📸 Progress Tracking** — Add timeline entries with notes and photos to track each plant's growth
-- **📋 Care Information** — Store and edit care details: sunlight, watering, soil, hardiness zone, companion plants, pests
-- **🤖 AI Plant Library** — Search any plant and get AI-generated growing guidelines, care tips, and planting info
-- **🥶 Frost Date Tracker** — Set your location to see frost date alerts and know when to plant
-- **🎨 Multiple Themes** — Switch between Green 🌿, Earth 🌾, and Ocean 🌊 color themes
+Azure has been removed.
 
-## Tech Stack
+## What It Does
 
-- **Next.js 16** (App Router) + **React 19** + **TypeScript** (strict mode)
-- **Tailwind CSS v4** with CSS custom properties for theming
-- **GitHub Models API** for AI-powered plant information
-- File-based JSON storage (no external database required)
+- Local-first plant passports with notes, care profile fields, tags, and coarse GeoPetal proofs
+- Observation capture with GPS, image tagging, plant profile updates, and encrypted LeafVault storage
+- LiteRT-LM prompt flows for:
+  - observation analysis
+  - care briefs
+  - Chat With A Plant
+  - plant problem diagnosis
+  - health check-ins
+- Gemma 4 vision-ready chat flow that can use:
+  - a newly selected plant image
+  - or a decrypted historical plant image from the local vault when available
+- Shared technique cards that can be queued for IPFS/Hive-style replication
+- Local-first by default, with cloud mode explicitly opt-in
+- Optional IPFS Kubo HTTPX client
+- Optional Hive JSON-RPC checkpoint preparation
+- Optional OQS advisory, repo references, build script, and requirements file
 
-## Getting Started
+## Runtime Modes
 
-### Prerequisites
+### Local-first
 
-- Node.js 18+
-- npm
-- A GitHub personal access token (for AI plant library features)
+Default mode. Everything works without network services:
 
-### Installation
+- encrypted local storage
+- synthetic CIDs when IPFS is off
+- prepared Hive checkpoint payloads without broadcast
+- local sync queue files
+- heuristic fallbacks when LiteRT-LM is unavailable
+
+### Cloud mode
+
+Cloud behavior is off until you enable it in the app or settings:
+
+- `network_mode = "cloud"`
+- `cloud_mode = true`
+- `ipfs_enabled = true` to activate Kubo RPC publishing
+- `hive_enabled = true` to prepare Hive network checkpoints
+- `hive_broadcast_enabled = true` only when you have a real signing/broadcast path
+
+## Main Features
+
+### Plant Passports
+
+Each plant gets a passport with:
+
+- plant name and species
+- hardiness zone
+- privacy class
+- profile summary
+- sunlight, watering, and soil guidance
+- tags
+- observation timeline
+
+### Observation Studio
+
+An observation can include:
+
+- note text
+- GPS coordinates
+- plant image
+- manual tags
+
+The runtime then:
+
+1. derives a GeoPetal proof
+2. runs prompt-driven plant analysis
+3. updates the plant profile
+4. seals JSON and image assets into LeafVault
+5. assigns a CID or synthetic CID
+6. prepares a Hive checkpoint payload
+7. queues a RootMesh sync job
+
+### Chat With A Plant
+
+The Guide tab and `plant-guide` CLI command create a long-context plant-specific response using:
+
+- the plant passport
+- observation history
+- health check-ins
+- shared techniques
+- historical image inventory
+- an optional current image
+- or a prior decrypted plant image when one exists
+
+This flow is designed for Gemma 4 vision through LiteRT-LM, with a local fallback when the model is missing.
+
+### Plant Diagnosis
+
+The Care Lab can create a diagnosis record that includes:
+
+- urgency
+- likely causes
+- care actions
+- prevention tips
+- narrative analysis
+- encrypted metadata asset
+- prepared Hive checkpoint payload
+
+### Health Check-Ins
+
+Health check-ins create revisit-friendly records with:
+
+- overall status
+- vigor score
+- hydration score
+- pest and disease pressure
+- action items
+- narrative summary
+
+### Shared Techniques
+
+Technique cards let users record reusable plant knowledge:
+
+- title
+- plant scope
+- problem focus
+- summary
+- step list
+- tags
+- privacy class
+
+These are stored locally first and can be queued for IPFS/Hive style distribution when cloud mode is enabled.
+
+## Storage Model
+
+The runtime creates a self-contained storage root:
+
+- encrypted vault state
+- settings file
+- model cache
+- encrypted LeafVault assets
+- anchor queue files
+- sync queue files
+
+By default, the desktop app uses:
+
+```text
+.kaylas-garden-runtime/
+```
+
+You can point commands at another root with `--root`.
+
+## Requirements
+
+Minimum:
+
+- Python 3.11+
+
+Recommended local modules:
+
+- `customtkinter`
+- `httpx`
+- `cryptography`
+
+Optional local AI / security modules:
+
+- LiteRT-LM runtime compatible with the Gemma 4 LiteRT model
+- `oqs` / `liboqs-python`
+
+The runtime degrades gracefully if some optional modules are missing.
+
+## Running The App
+
+Launch the desktop app:
 
 ```bash
-git clone https://github.com/cinnamon-msft/kaylas-garden.git
-cd kaylas-garden
-npm install
+python3 main.py
 ```
 
-### Environment Variables
-
-Create a `.env.local` file:
-
-```env
-GITHUB_TOKEN=your_github_personal_access_token
-```
-
-The `GITHUB_TOKEN` is used for the AI Plant Library feature (GitHub Models API).
-
-### Development
+Use a custom runtime root:
 
 ```bash
-npm run dev
+python3 main.py --root /tmp/kaylas-garden-dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) in your browser.
+## Useful CLI Commands
 
-### Aspire
+Bootstrap repo data into the encrypted runtime:
 
 ```bash
-npm run aspire:start
+python3 main.py bootstrap
 ```
 
-This starts the Next.js app through the Aspire AppHost.
-
-### Build
+Create a plant passport:
 
 ```bash
-npm run build
-npm start
+python3 main.py add-plant --name "Rosemary Pot" --species "Salvia rosmarinus"
 ```
 
-## Project Structure
+Record an observation:
 
-```
-src/
-  app/              # Next.js App Router pages & API routes
-    api/plants/     # Plant CRUD endpoints
-    api/library/    # AI plant library endpoint
-    api/frost-dates/# Frost date lookup
-    api/settings/   # User settings
-    api/upload/     # Image upload
-    library/        # Plant Library page
-    plants/[id]/    # Plant detail page
-    settings/       # Settings page
-  components/       # Shared UI components
-  lib/              # Types, data access layer
-data/               # JSON data storage (plants, settings, cache)
-public/uploads/     # Uploaded plant images
+```bash
+python3 main.py observe \
+  --plant-id <plant-id> \
+  --note "Aphids on the top shoots and the new growth is curling." \
+  --lat 42.36 \
+  --lon -71.05 \
+  --image /path/to/plant.jpg \
+  --tags aphids,deck
 ```
 
-## License
+Generate a care brief:
 
-MIT
+```bash
+python3 main.py care-brief --plant-id <plant-id> --question "What should I watch next?"
+```
 
-# Advancing
+Chat with a plant:
 
-Yes — and the plant app is actually a much better fit for this stack than a generic storage platform.
+```bash
+python3 main.py plant-guide \
+  --plant-id <plant-id> \
+  --question "Compare this week to prior plant photos and tell me what changed."
+```
 
-From the uploaded **Kayla’s Garden** project, you already have a solid base: plant tracking, progress photos, frost dates, image upload, and an AI plant library. The obvious next step is to turn it into a **decentralized plant intelligence network** so you can replace the Azure dependency with local AI + encrypted IPFS + lightweight blockchain anchoring.
+Run a diagnosis:
 
-## Concept
+```bash
+python3 main.py diagnose \
+  --plant-id <plant-id> \
+  --note "Lower leaves are yellowing and the soil stays wet for days." \
+  --tags yellowing,wet-soil
+```
 
-Build **Kayla’s Garden** into a **post-quantum-secure plant observability platform**:
+Save a health check-in:
 
-A user snaps a plant photo, the app identifies the species locally or on-device, adds GPS metadata, stores the image and health history in encrypted IPFS buckets, syncs that data across trusted nodes and a few cloud replicas, and anchors proofs plus public plant timeline events to Hive.
+```bash
+python3 main.py health-checkin \
+  --plant-id <plant-id> \
+  --note "New growth looks better, but the root zone still dries slowly."
+```
 
-That gives you:
+Publish a technique card:
 
-* local-first plant records
-* durable photo/history timelines
-* shared stewardship for trees and public plants
-* fast edge reads
-* no hard dependency on Azure
-* better privacy for location and personal collections
+```bash
+python3 main.py share-technique \
+  --plant-id <plant-id> \
+  --title "Let rosemary dry a bit deeper" \
+  --problem-focus "Wet roots in containers" \
+  --summary "Waiting for the pot to lighten reduced stress." \
+  --steps "Check pot weight|Check moisture below the surface|Water deeply only when the pot lightens" \
+  --tags rosemary,watering \
+  --privacy shared
+```
 
-## What the upgraded system becomes
+Check network and OQS state:
 
-Each user gets a **SyncID**.
+```bash
+python3 main.py network-status
+python3 main.py oqs-status
+python3 main.py oqs-search --query ML
+```
 
-That SyncID owns one or more **plant buckets**:
+## LiteRT-LM And Gemma 4
 
-* `private/garden`
-* `community/trees`
-* `species/oaks`
-* `caretaking/heritage-trees`
-* `research/local-pollinators`
+`main.py` is already wired for a LiteRT-LM model catalog and a Gemma 4 LiteRT model entry.
 
-Inside each bucket are pinned IPFS objects:
+The app supports:
 
-* plant photos
-* GPS-tagged observations
-* health assessments
-* care logs
-* growth timelines
-* disease detections
-* watering history
-* community annotations
-* sensor snapshots
+- model status inspection
+- model download workflow
+- model hash verification
+- CPU/GPU backend selection
+- native image input when the LiteRT build supports it
 
-Every update is:
+Related commands:
 
-1. encrypted locally
-2. added to local IPFS
-3. pinned into a signed bucket manifest
-4. replicated by backend syncers across multiple clouds or nodes
-5. optionally checkpointed to Hive for public verification
+```bash
+python3 main.py model-status
+python3 main.py verify-model
+python3 main.py download-model
+```
 
-## Why this is powerful for the plant use case
+## IPFS And Hive
 
-A plant app has exactly the kind of data that benefits from this architecture:
+### IPFS
 
-### Highly active data
+The runtime includes a fuller HTTPX Kubo client for:
 
-Plant records are not static. They evolve over time:
+- `add`
+- MFS mirroring
+- status reporting
 
-* more photos
-* new health notes
-* seasonal changes
-* disease progression
-* caretaker handoffs
-* location-linked history
+It stays inactive until cloud mode and `ipfs_enabled` are turned on.
 
-### Edge-friendly
+### Hive
 
-The phone or local node can do:
+The runtime includes a Hive JSON-RPC client for:
 
-* image classification
-* health scoring
-* offline capture
-* local cache reads
+- account-aware checkpoint preparation
+- local queueing
+- custom-json operation construction
 
-Then it syncs later.
+Broadcast stays off unless you explicitly enable it and provide a real signed transaction path.
 
-### Persistence matters
+## OQS Post-Quantum Notes
 
-A 100-year-old tree should have a persistent record that survives app migrations, provider shutdowns, or centralized database failures.
+OQS references are included in the runtime, plus local build helpers:
 
-### Multi-user stewardship
+- [requirements-oqs.txt](./requirements-oqs.txt)
+- [scripts/build_oqs.sh](./scripts/build_oqs.sh)
 
-Different people can observe the same plant over time:
+Official upstream repositories:
 
-* homeowner
-* arborist
-* neighbor
-* volunteer group
-* city forestry staff
+- `liboqs`: https://github.com/open-quantum-safe/liboqs
+- `liboqs-python`: https://github.com/open-quantum-safe/liboqs-python
 
-That means the plant becomes a living, signed data object rather than just an app row in one database.
+## Files To Know
 
-## Suggested architecture
+- [main.py](./main.py): single-file app, runtime, CLI, UI, prompt system, IPFS/Hive/OQS integration
+- [scripts/build_oqs.sh](./scripts/build_oqs.sh): local OQS build helper
+- [requirements-oqs.txt](./requirements-oqs.txt): OQS-related Python dependency hints
 
-## 1. Local AI layer
+## Current Status
 
-Replace Azure plant intelligence with:
+This repo is intentionally local-first and resilient when optional dependencies are missing.
 
-* local vision model for species ID
-* local health classifier
-* optional small local LLM for care suggestions and note summarization
-* fallback remote inference only when needed
+That means:
 
-Good workloads for local inference:
+- if LiteRT-LM is unavailable, the app falls back to heuristic plant guidance
+- if `httpx` is unavailable, cloud transport stays inactive
+- if `cryptography` is unavailable, the runtime stays functional but marks storage as degraded
+- if OQS is unavailable, the app exposes fallback security guidance and build instructions
 
-* identify likely plant species
-* estimate stress/disease
-* detect yellowing, pest damage, dehydration
-* summarize changes since last observation
+## Direction
 
-## 2. OQS post-quantum security
+Kayla's Garden is now positioned as a private-first plant intelligence studio:
 
-Use OQS for:
-
-* SyncID key exchange
-* device enrollment
-* bucket key wrapping
-* signed observation manifests
-* caretaker delegation records
-
-Use PQ crypto for keys and signatures, not for large media encryption directly. Use symmetric encryption for photos and records, then wrap those keys with PQ-capable key exchange.
-
-## 3. Local secure IPFS node
-
-The node stores encrypted plant objects:
-
-* image blobs
-* metadata objects
-* change logs
-* geotag records
-* care journals
-* health timeline deltas
-
-Pinned data gives you a persistent plant history surface.
-
-## 4. Multi-cloud backend syncer
-
-Run syncers in a few places:
-
-* cheap VPS
-* home server
-* one or two cloud regions
-* optional community-operated nodes
-
-Their job:
-
-* fetch new encrypted CIDs
-* verify signed manifests
-* re-pin important data
-* maintain availability
-* index public plant timelines
-
-## 5. Hive anchoring layer
-
-Hive is good for publishing small public records, not the photos themselves.
-
-Use it for:
-
-* public plant IDs
-* observation proofs
-* care event attestations
-* community stewardship logs
-* public heritage tree registries
-* reputation for verifiers/caretakers
-
-That way you get a public timeline without exposing private raw data.
-
-## A concrete app flow
-
-User opens camera mode.
-
-1. snaps photo
-2. local model predicts plant species
-3. GPS coordinates are attached
-4. health model scores leaf condition, stress, pest risk
-5. note is generated locally
-6. photo + metadata are encrypted
-7. object is written to IPFS
-8. CID goes into the plant’s bucket manifest
-9. local node pins it
-10. syncer replicates it
-11. Hive gets a compact checkpoint like:
-
-* plant ID
-* timestamp
-* region hash
-* observation manifest hash
-
-Now the plant has a verifiable timeline.
-
-## Public and private modes
-
-You probably want three privacy classes:
-
-### Private plants
-
-Home garden plants, exact GPS hidden, only owner and approved caretakers can read.
-
-### Shared plants
-
-Friends, family, or garden club can collaborate.
-
-### Public ecological assets
-
-Old trees, notable plants, trail plants, or restoration sites. Exact location can be blurred if sensitive.
-
-That privacy split is where SyncID + encrypted buckets really matter.
-
-## Best feature expansion for Kayla’s Garden
-
-Here’s the strongest direction:
-
-### Plant Passport
-
-Each plant gets a permanent record:
-
-* species
-* nickname
-* date added
-* GPS region
-* growth history
-* care history
-* health trend
-* lineage of observations
-
-### Community Tagging
-
-Other users can add signed observations to the same public plant.
-
-### Stewardship Mode
-
-Users can “adopt” a tree or public plant and maintain a care or observation schedule.
-
-### Time-Lapse Health Ledger
-
-A chronological chain of observations lets the app detect:
-
-* decline
-* recovery
-* seasonal stress
-* intervention outcomes
-
-### Heritage Tree Registry
-
-Very old trees can have public history objects and caretaker handoff logs.
-
-## 8 new technologies for this system
-
-### 1. **PlantSyncID**
-
-A SyncID profile specialized for plant identity, ownership, stewardship roles, and observation rights.
-
-### 2. **LeafVault Buckets**
-
-Encrypted IPFS buckets optimized for plant records, photo timelines, and care logs.
-
-### 3. **GeoPetal Proofs**
-
-A privacy-preserving GPS attestation system that proves a plant was observed in a real area without exposing exact coordinates publicly.
-
-### 4. **RootMesh Syncer**
-
-A multi-cloud and peer relay system that keeps plant buckets pinned and regionally close to active users.
-
-### 5. **BloomTrace Ledger**
-
-A Hive-anchored event stream for public observation history, caretaker changes, and heritage-tree records.
-
-### 6. **PhytoScan Edge**
-
-A local vision pipeline that identifies species, detects health issues, and computes change-over-time scores from photos.
-
-### 7. **Canopy Reputation**
-
-A trust layer where botanists, arborists, and reliable contributors build reputation through signed plant observations.
-
-### 8. **SeasonGraph Engine**
-
-A temporal model that compares plant condition against frost dates, climate shifts, and prior seasonal baselines.
-
-## Why this can be better than “just a plant app”
-
-Because then it becomes:
-
-* a personal garden tracker
-* a community stewardship network
-* a living archive for long-lived trees
-* a local-first ecological intelligence layer
-* a decentralized dataset for plant health over time
-
-That is a much more defensible product than basic CRUD + image upload.
-
-## One strong positioning statement
-
-**Kayla’s Garden could evolve into a post-quantum-secure, local-first ecological memory network where every plant, tree, and caretaker interaction becomes a persistent, verifiable, privacy-aware living record.**
-
-## Practical build order
-
-1. remove Azure dependency for plant intelligence
-2. add local image classification
-3. add GPS-tagged observation objects
-4. store observations in encrypted IPFS
-5. add SyncID for user/device identity
-6. add multi-node pin replication
-7. anchor public proofs to Hive
-8. add community/heritage tree mode
-9. add health trend intelligence 
+- desktop-first
+- local model capable
+- vision-aware
+- encrypted by design
+- IPFS/Hive ready
+- community-shareable without requiring a centralized cloud dependency

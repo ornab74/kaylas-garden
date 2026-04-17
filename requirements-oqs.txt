@@ -1,0 +1,14 @@
+# Python-side helpers for building and using Open Quantum Safe in this project.
+# Official repos:
+# - https://github.com/open-quantum-safe/liboqs
+# - https://github.com/open-quantum-safe/liboqs-python
+
+pip
+setuptools
+wheel
+cmake
+ninja
+cffi
+pycparser
+nose2
+git+https://github.com/open-quantum-safe/liboqs-python.git
