@@ -98,6 +98,9 @@ INSECURE_PLAINTEXT_MAGIC = b"KGGPLAIN1"
 KEY_WRAP_MAGIC = b"KGGKEY01"
 KEY_WRAP_SALT_LEN = 16
 KEY_WRAP_NONCE_LEN = 12
+TRANSFER_PACKAGE_MAGIC = b"KGGXFER1"
+TRANSFER_PACKAGE_SALT_LEN = 16
+TRANSFER_PACKAGE_NONCE_LEN = 12
 DEFAULT_IPFS_API = os.environ.get("KAYLAS_GARDEN_IPFS_API", "http://127.0.0.1:5001/api/v0")
 DEFAULT_HIVE_API = os.environ.get("KAYLAS_GARDEN_HIVE_API", "https://api.hive.blog")
 DEFAULT_TRUSTED_NODES = ("local-ipfs", "home-greenhouse", "community-relay-east")
@@ -762,6 +765,36 @@ def unlock_protected_key(blob: bytes, password: str) -> bytes:
     return raw_key
 
 
+def encrypt_transfer_package(payload: bytes, password: str) -> bytes:
+    if AESGCM is None or Scrypt is None:
+        raise RuntimeError(f"cryptography is required for secure transfer packages. Import error: {CRYPTO_IMPORT_ERROR}")
+    clean_password = sanitize_text(password, max_chars=256)
+    if len(clean_password) < 8:
+        raise ValueError("Transfer password must be at least 8 characters.")
+    salt = os.urandom(TRANSFER_PACKAGE_SALT_LEN)
+    nonce = os.urandom(TRANSFER_PACKAGE_NONCE_LEN)
+    key = derive_password_key(clean_password, salt)
+    ciphertext = AESGCM(key).encrypt(nonce, payload, TRANSFER_PACKAGE_MAGIC)
+    return TRANSFER_PACKAGE_MAGIC + salt + nonce + ciphertext
+
+
+def decrypt_transfer_package(blob: bytes, password: str) -> bytes:
+    if AESGCM is None or Scrypt is None:
+        raise RuntimeError(f"cryptography is required for secure transfer packages. Import error: {CRYPTO_IMPORT_ERROR}")
+    if not blob.startswith(TRANSFER_PACKAGE_MAGIC):
+        raise ValueError("Package does not look like a Kayla's Garden transfer bundle.")
+    offset = len(TRANSFER_PACKAGE_MAGIC)
+    salt = blob[offset : offset + TRANSFER_PACKAGE_SALT_LEN]
+    nonce_start = offset + TRANSFER_PACKAGE_SALT_LEN
+    nonce_end = nonce_start + TRANSFER_PACKAGE_NONCE_LEN
+    nonce = blob[nonce_start:nonce_end]
+    payload = blob[nonce_end:]
+    if len(salt) != TRANSFER_PACKAGE_SALT_LEN or len(nonce) != TRANSFER_PACKAGE_NONCE_LEN or not payload:
+        raise ValueError("Transfer package is truncated.")
+    key = derive_password_key(sanitize_text(password, max_chars=256), salt)
+    return AESGCM(key).decrypt(nonce, payload, TRANSFER_PACKAGE_MAGIC)
+
+
 def encrypt_file(src: Path, dest: Path, key: bytes) -> None:
     if not crypto_available():
         _atomic_write_bytes(dest, INSECURE_PLAINTEXT_MAGIC + src.read_bytes())
@@ -983,6 +1016,90 @@ class EncryptedGardenVault:
             _atomic_write_bytes(self.paths.key_path, blob)
             self._cached_key = raw_key
             return raw_key
+
+    def key_status(self) -> Dict[str, Any]:
+        exists = self.paths.key_path.exists()
+        protected = False
+        blob_type = "missing"
+        if exists:
+            try:
+                blob = self.paths.key_path.read_bytes()
+                protected = is_protected_key_blob(blob)
+                blob_type = "wrapped" if protected else "raw"
+            except Exception as exc:
+                blob_type = f"unreadable:{sanitize_text(exc, max_chars=120)}"
+        return {
+            "crypto_available": crypto_available(),
+            "key_path": str(self.paths.key_path),
+            "key_exists": exists,
+            "password_protected": protected,
+            "key_blob_type": blob_type,
+            "vault_present": self.paths.vault_path.exists(),
+            "secret_vault_present": self.paths.secret_settings_path.exists(),
+        }
+
+    def set_password(self, *, current_password: Optional[str] = None, new_password: Optional[str] = None) -> Dict[str, Any]:
+        with self.lock:
+            raw_key = self.get_or_create_key(password=current_password)
+            clean_new_password = sanitize_text(new_password, max_chars=256)
+            if clean_new_password and len(clean_new_password) < 8:
+                raise ValueError("New vault password must be at least 8 characters.")
+            blob = protect_raw_key(raw_key, clean_new_password) if clean_new_password else raw_key
+            _atomic_write_bytes(self.paths.key_path, blob)
+            self._cached_key = raw_key
+            status = self.key_status()
+            status["password_set"] = bool(clean_new_password)
+            return status
+
+    def rotate_data_key(self, *, current_password: Optional[str] = None, new_password: Optional[str] = None) -> Dict[str, Any]:
+        if not crypto_available():
+            raise RuntimeError(f"cryptography is required for full key rotation. Import error: {CRYPTO_IMPORT_ERROR}")
+        with self.lock:
+            old_key = self.get_or_create_key(password=current_password)
+            clean_new_password = sanitize_text(new_password, max_chars=256)
+            if clean_new_password and len(clean_new_password) < 8:
+                raise ValueError("New vault password must be at least 8 characters.")
+            new_key = os.urandom(32)
+            staged: List[Tuple[Path, Path]] = []
+            leafvault_files = [path for path in self.paths.leafvault_dir.rglob("*.aes") if path.is_file()]
+            targets = [self.paths.vault_path, self.paths.secret_settings_path]
+
+            def stage_payload(target: Path, data: bytes) -> None:
+                temp = target.with_suffix(target.suffix + f".rotate.{uuid.uuid4().hex}")
+                _atomic_write_bytes(temp, data)
+                staged.append((temp, target))
+
+            try:
+                for target in targets:
+                    if not target.exists():
+                        continue
+                    raw = aes_decrypt(target.read_bytes(), old_key)
+                    stage_payload(target, aes_encrypt(raw, new_key))
+                for target in leafvault_files:
+                    raw = aes_decrypt(target.read_bytes(), old_key)
+                    stage_payload(target, aes_encrypt(raw, new_key))
+                if self.paths.encrypted_model_path.exists():
+                    plain_temp = _tmp_path("model_rotate_plain", ".litertlm")
+                    encrypted_temp = self.paths.encrypted_model_path.with_suffix(self.paths.encrypted_model_path.suffix + f".rotate.{uuid.uuid4().hex}")
+                    try:
+                        decrypt_file(self.paths.encrypted_model_path, plain_temp, old_key)
+                        encrypt_file(plain_temp, encrypted_temp, new_key)
+                    finally:
+                        safe_cleanup([plain_temp])
+                    staged.append((encrypted_temp, self.paths.encrypted_model_path))
+                key_blob = protect_raw_key(new_key, clean_new_password) if clean_new_password else new_key
+                key_temp = self.paths.key_path.with_suffix(self.paths.key_path.suffix + f".rotate.{uuid.uuid4().hex}")
+                _atomic_write_bytes(key_temp, key_blob)
+                staged.append((key_temp, self.paths.key_path))
+                for temp, target in staged:
+                    temp.replace(target)
+                    _set_owner_only_permissions(target, is_dir=False)
+                self._cached_key = new_key
+            finally:
+                safe_cleanup([temp for temp, _ in staged if temp.exists()])
+            status = self.key_status()
+            status.update({"rotated": True, "leafvault_objects_resealed": len(leafvault_files)})
+            return status
 
     def default_state(self) -> Dict[str, Any]:
         return {
@@ -2966,8 +3083,8 @@ class KaylasGardenRuntime:
         self.vault = EncryptedGardenVault(self.paths)
         self.state = self.vault.load(password=password)
         self.settings = load_settings(self.paths)
-        self.identity_service = PlantSyncIDService(lambda: self.vault.get_or_create_key(password=password))
-        self.secret_vault = SecretSettingsVault(lambda: self.vault.get_or_create_key(password=password), self.paths)
+        self.identity_service = PlantSyncIDService(lambda: self.vault.get_or_create_key(password=self.password))
+        self.secret_vault = SecretSettingsVault(lambda: self.vault.get_or_create_key(password=self.password), self.paths)
         self.secret_settings = self.secret_vault.load()
         self._migrate_plaintext_secrets()
         self.identity = self.identity_service.ensure_identity(self.state, self.settings.get("garden_name") or "Kayla's Garden")
@@ -2979,7 +3096,7 @@ class KaylasGardenRuntime:
         self.ipfs = IpfsKuboClient(lambda: load_settings(self.paths), lambda: self.secret_settings, self.paths)
         self.hive = HiveBlockchainClient(lambda: load_settings(self.paths), lambda: self.secret_settings, self.paths)
         self.leafvault = LeafVaultBuckets(
-            lambda: self.vault.get_or_create_key(password=password),
+            lambda: self.vault.get_or_create_key(password=self.password),
             lambda: load_settings(self.paths),
             self.ipfs,
             self.paths,
@@ -3037,6 +3154,566 @@ class KaylasGardenRuntime:
 
     def network_secret_status(self) -> Dict[str, Any]:
         return self.secret_vault.status()
+
+    def _transfer_history(self) -> List[Dict[str, Any]]:
+        notes = self.state.setdefault("runtime_notes", {})
+        history = notes.setdefault("transfer_history", [])
+        if not isinstance(history, list):
+            history = []
+            notes["transfer_history"] = history
+        return history
+
+    def _record_transfer_event(self, kind: str, payload: Mapping[str, Any]) -> None:
+        history = self._transfer_history()
+        history.append(
+            {
+                "event_id": f"transfer-{uuid.uuid4().hex[:12]}",
+                "kind": sanitize_text(kind, max_chars=40),
+                "recorded_at": now_iso(),
+                **{str(key): value for key, value in payload.items()},
+            }
+        )
+        del history[:-24]
+
+    def vault_security_status(self) -> Dict[str, Any]:
+        key_status = self.vault.key_status()
+        leafvault_objects = len([path for path in self.paths.leafvault_dir.rglob("*.aes") if path.is_file()])
+        transfer_history = self._transfer_history()
+        exports = [item for item in transfer_history if sanitize_text(item.get("kind"), max_chars=40) == "export"]
+        imports = [item for item in transfer_history if sanitize_text(item.get("kind"), max_chars=40) == "import"]
+        key_rotations = [item for item in transfer_history if sanitize_text(item.get("kind"), max_chars=40) == "rotate-key"]
+        return {
+            **key_status,
+            "leafvault_object_count": leafvault_objects,
+            "sealed_model_present": self.paths.encrypted_model_path.exists(),
+            "package_count": len(list(self.paths.reports_dir.glob("*.kgx"))),
+            "transfer_exports": len(exports),
+            "transfer_imports": len(imports),
+            "key_rotation_events": len(key_rotations),
+            "latest_transfer_event": transfer_history[-1] if transfer_history else None,
+        }
+
+    def set_vault_password(self, new_password: str, *, current_password: Optional[str] = None) -> Dict[str, Any]:
+        status = self.vault.set_password(current_password=current_password or self.password, new_password=new_password)
+        self.password = sanitize_text(new_password, max_chars=256) or None
+        self.secret_settings = self.secret_vault.load()
+        self.state = self.vault.load(password=self.password)
+        self.identity = self.identity_service.ensure_identity(self.state, self.settings.get("garden_name") or "Kayla's Garden")
+        self._record_transfer_event("set-password", {"password_protected": bool(status.get("password_protected"))})
+        self.save()
+        return status
+
+    def rotate_vault_key(self, *, new_password: str = "", current_password: Optional[str] = None) -> Dict[str, Any]:
+        status = self.vault.rotate_data_key(current_password=current_password or self.password, new_password=new_password or self.password or "")
+        self.password = sanitize_text(new_password or self.password, max_chars=256) or None
+        self.secret_settings = self.secret_vault.load()
+        self.state = self.vault.load(password=self.password)
+        self.identity = self.identity_service.ensure_identity(self.state, self.settings.get("garden_name") or "Kayla's Garden")
+        self._record_transfer_event("rotate-key", {"leafvault_objects_resealed": status.get("leafvault_objects_resealed", 0)})
+        self.save()
+        return status
+
+    def _non_secret_settings_snapshot(self) -> Dict[str, Any]:
+        return {
+            "garden_name": sanitize_text(self.settings.get("garden_name") or "Kayla's Garden", max_chars=120),
+            "theme": sanitize_text(self.settings.get("theme") or "green", max_chars=32),
+            "location": sanitize_text(self.settings.get("location"), max_chars=120),
+            "network_mode": normalize_network_mode(self.settings.get("network_mode")),
+            "local_first_only": bool(self.settings.get("local_first_only", True)),
+            "cloud_mode": bool(self.settings.get("cloud_mode", False)),
+            "trusted_nodes": [sanitize_text(item, max_chars=80) for item in list(self.settings.get("trusted_nodes") or []) if sanitize_text(item, max_chars=80)],
+        }
+
+    def _bundle_records_for_scope(self, plant_id: Optional[str]) -> Dict[str, Any]:
+        if plant_id:
+            plant_ids = {sanitize_text(plant_id, max_chars=64)}
+            plants = {
+                pid: json.loads(json.dumps(raw, ensure_ascii=True))
+                for pid, raw in (self.state.get("plants") or {}).items()
+                if pid in plant_ids and isinstance(raw, dict)
+            }
+            manifests = {
+                pid: json.loads(json.dumps(raw, ensure_ascii=True))
+                for pid, raw in (self.state.get("manifests") or {}).items()
+                if pid in plant_ids and isinstance(raw, dict)
+            }
+            guide_threads = [
+                json.loads(json.dumps(item, ensure_ascii=True))
+                for item in list(self.state.get("guide_threads") or [])
+                if isinstance(item, dict) and sanitize_text(item.get("plant_id"), max_chars=64) in plant_ids
+            ]
+            thread_ids = {sanitize_text(item.get("thread_id"), max_chars=64) for item in guide_threads}
+            case_reports = [
+                json.loads(json.dumps(item, ensure_ascii=True))
+                for item in list(self.state.get("case_reports") or [])
+                if isinstance(item, dict)
+                and (
+                    sanitize_text(item.get("plant_id"), max_chars=64) in plant_ids
+                    or sanitize_text(item.get("thread_id"), max_chars=64) in thread_ids
+                )
+            ]
+            report_ids = {sanitize_text(item.get("report_id"), max_chars=64) for item in case_reports}
+            trust_claims = [
+                json.loads(json.dumps(item, ensure_ascii=True))
+                for item in list(self.state.get("trust_claims") or [])
+                if isinstance(item, dict)
+                and (
+                    sanitize_text(item.get("plant_id"), max_chars=64) in plant_ids
+                    or sanitize_text(item.get("report_id"), max_chars=64) in report_ids
+                )
+            ]
+            claim_ids = {sanitize_text(item.get("claim_id"), max_chars=64) for item in trust_claims}
+            claim_reviews = [
+                json.loads(json.dumps(item, ensure_ascii=True))
+                for item in list(self.state.get("claim_reviews") or [])
+                if isinstance(item, dict)
+                and (
+                    sanitize_text(item.get("plant_id"), max_chars=64) in plant_ids
+                    or sanitize_text(item.get("claim_id"), max_chars=64) in claim_ids
+                )
+            ]
+            pin_group_comments = [
+                json.loads(json.dumps(item, ensure_ascii=True))
+                for item in list(self.state.get("pin_group_comments") or [])
+                if isinstance(item, dict) and sanitize_text(item.get("plant_id"), max_chars=64) in plant_ids
+            ]
+            group_ids = {sanitize_text(item.get("group_id"), max_chars=64) for item in pin_group_comments}
+            peer_pin_requests = [
+                json.loads(json.dumps(item, ensure_ascii=True))
+                for item in list(self.state.get("peer_pin_requests") or [])
+                if isinstance(item, dict) and sanitize_text(item.get("group_id"), max_chars=64) in group_ids
+            ]
+            group_ids.update(sanitize_text(item.get("group_id"), max_chars=64) for item in peer_pin_requests)
+            pin_groups = [
+                json.loads(json.dumps(item, ensure_ascii=True))
+                for item in list(self.state.get("pin_groups") or [])
+                if isinstance(item, dict) and sanitize_text(item.get("group_id"), max_chars=64) in group_ids
+            ]
+            peer_ids = {
+                sanitize_text(member_id, max_chars=64)
+                for group in pin_groups
+                for member_id in list(group.get("member_peer_ids") or [])
+                if sanitize_text(member_id, max_chars=64)
+            }
+            peer_ids.update(
+                sanitize_text(target_id, max_chars=64)
+                for request in peer_pin_requests
+                for target_id in list(request.get("target_peer_ids") or [])
+                if sanitize_text(target_id, max_chars=64)
+            )
+            peer_users = [
+                json.loads(json.dumps(item, ensure_ascii=True))
+                for item in list(self.state.get("peer_users") or [])
+                if isinstance(item, dict) and sanitize_text(item.get("peer_id"), max_chars=64) in peer_ids
+            ]
+            return {
+                "plants": plants,
+                "manifests": manifests,
+                "diagnoses": [
+                    json.loads(json.dumps(item, ensure_ascii=True))
+                    for item in list(self.state.get("diagnoses") or [])
+                    if isinstance(item, dict) and sanitize_text(item.get("plant_id"), max_chars=64) in plant_ids
+                ],
+                "health_checkins": [
+                    json.loads(json.dumps(item, ensure_ascii=True))
+                    for item in list(self.state.get("health_checkins") or [])
+                    if isinstance(item, dict) and sanitize_text(item.get("plant_id"), max_chars=64) in plant_ids
+                ],
+                "shared_techniques": [
+                    json.loads(json.dumps(item, ensure_ascii=True))
+                    for item in list(self.state.get("shared_techniques") or [])
+                    if isinstance(item, dict) and sanitize_text(item.get("plant_id"), max_chars=64) in plant_ids
+                ],
+                "guide_threads": guide_threads,
+                "case_reports": case_reports,
+                "trust_claims": trust_claims,
+                "claim_reviews": claim_reviews,
+                "peer_users": peer_users,
+                "pin_groups": pin_groups,
+                "pin_group_comments": pin_group_comments,
+                "peer_pin_requests": peer_pin_requests,
+            }
+        return {
+            "plants": json.loads(json.dumps(self.state.get("plants") or {}, ensure_ascii=True)),
+            "manifests": json.loads(json.dumps(self.state.get("manifests") or {}, ensure_ascii=True)),
+            "diagnoses": json.loads(json.dumps(self.state.get("diagnoses") or [], ensure_ascii=True)),
+            "health_checkins": json.loads(json.dumps(self.state.get("health_checkins") or [], ensure_ascii=True)),
+            "shared_techniques": json.loads(json.dumps(self.state.get("shared_techniques") or [], ensure_ascii=True)),
+            "guide_threads": json.loads(json.dumps(self.state.get("guide_threads") or [], ensure_ascii=True)),
+            "case_reports": json.loads(json.dumps(self.state.get("case_reports") or [], ensure_ascii=True)),
+            "trust_claims": json.loads(json.dumps(self.state.get("trust_claims") or [], ensure_ascii=True)),
+            "claim_reviews": json.loads(json.dumps(self.state.get("claim_reviews") or [], ensure_ascii=True)),
+            "peer_users": json.loads(json.dumps(self.state.get("peer_users") or [], ensure_ascii=True)),
+            "pin_groups": json.loads(json.dumps(self.state.get("pin_groups") or [], ensure_ascii=True)),
+            "pin_group_comments": json.loads(json.dumps(self.state.get("pin_group_comments") or [], ensure_ascii=True)),
+            "peer_pin_requests": json.loads(json.dumps(self.state.get("peer_pin_requests") or [], ensure_ascii=True)),
+        }
+
+    def _bundle_attachments(self, records: Mapping[str, Any]) -> Tuple[List[Dict[str, Any]], List[str]]:
+        attachments: List[Dict[str, Any]] = []
+        warnings: List[str] = []
+        seen: set[str] = set()
+        vault_key = self.vault.get_or_create_key(password=self.password)
+        for raw_passport in (records.get("plants") or {}).values():
+            if not isinstance(raw_passport, dict):
+                continue
+            for observation in list(raw_passport.get("observations") or []):
+                if not isinstance(observation, dict):
+                    continue
+                for raw_asset in list(observation.get("assets") or []):
+                    if not isinstance(raw_asset, dict):
+                        continue
+                    digest = sanitize_text(raw_asset.get("digest"), max_chars=128)
+                    local_path = sanitize_text(raw_asset.get("local_path"), max_chars=400)
+                    if not digest or not local_path or digest in seen:
+                        continue
+                    path = Path(local_path).expanduser()
+                    if not path.exists():
+                        warnings.append(f"Missing local attachment for digest {digest}")
+                        continue
+                    encrypted_bytes = path.read_bytes()
+                    payload = aes_decrypt(encrypted_bytes, vault_key) if bool(raw_asset.get("encrypted", True)) else encrypted_bytes
+                    actual_digest = sha256_bytes(payload)
+                    if digest and actual_digest != digest:
+                        raise ValueError(f"Attachment digest mismatch for {digest}.")
+                    attachments.append(
+                        {
+                            "digest": actual_digest,
+                            "asset_type": sanitize_text(raw_asset.get("asset_type") or "object", max_chars=32),
+                            "media_type": sanitize_text(raw_asset.get("media_type") or "application/octet-stream", max_chars=80),
+                            "filename_hint": path.name,
+                            "size_bytes": len(payload),
+                            "payload_hex": payload.hex(),
+                        }
+                    )
+                    seen.add(actual_digest)
+        return attachments, warnings
+
+    def export_secure_bundle(
+        self,
+        *,
+        bundle_path: Union[str, Path],
+        bundle_password: str,
+        plant_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        target = Path(bundle_path).expanduser()
+        if target.suffix.lower() != ".kgx":
+            target = target.with_suffix(".kgx")
+        records = self._bundle_records_for_scope(plant_id)
+        attachments, warnings = self._bundle_attachments(records)
+        payload = {
+            "bundle_version": "kaylas-garden-transfer-v1",
+            "created_at": now_iso(),
+            "scope": "plant" if plant_id else "garden",
+            "source": {
+                "garden_name": sanitize_text(self.state.get("garden", {}).get("name") or "Kayla's Garden", max_chars=120),
+                "sync_id": self.identity.sync_id,
+                "fingerprint": self.identity.fingerprint,
+            },
+            "security": {
+                "cipher": "AES-256-GCM",
+                "secrets_included": False,
+                "attachments_resealed": True,
+            },
+            "settings": self._non_secret_settings_snapshot(),
+            "garden": json.loads(json.dumps(self.state.get("garden") or {}, ensure_ascii=True)),
+            "security_profile": json.loads(json.dumps(self.state.get("security") or {}, ensure_ascii=True)),
+            "records": records,
+            "attachments": attachments,
+            "warnings": warnings,
+            "manifest": {
+                "plant_count": len(records.get("plants") or {}),
+                "diagnosis_count": len(records.get("diagnoses") or []),
+                "health_checkin_count": len(records.get("health_checkins") or []),
+                "shared_technique_count": len(records.get("shared_techniques") or []),
+                "guide_thread_count": len(records.get("guide_threads") or []),
+                "case_report_count": len(records.get("case_reports") or []),
+                "claim_count": len(records.get("trust_claims") or []),
+                "review_count": len(records.get("claim_reviews") or []),
+                "attachment_count": len(attachments),
+            },
+        }
+        payload["manifest_signature"] = self.identity_service.sign(payload["manifest"])
+        sealed = encrypt_transfer_package(canonical_json(payload), bundle_password)
+        _atomic_write_bytes(target, sealed)
+        event = {
+            "path": str(target),
+            "scope": payload["scope"],
+            "plant_count": payload["manifest"]["plant_count"],
+            "attachment_count": payload["manifest"]["attachment_count"],
+        }
+        self._record_transfer_event("export", event)
+        self.save()
+        return {"bundle_path": str(target), **event, "warnings": warnings}
+
+    def import_secure_bundle(self, *, bundle_path: Union[str, Path], bundle_password: str) -> Dict[str, Any]:
+        source = Path(bundle_path).expanduser().resolve(strict=True)
+        raw_payload = decrypt_transfer_package(source.read_bytes(), bundle_password)
+        package = json.loads(raw_payload.decode("utf-8"))
+        if not isinstance(package, dict):
+            raise ValueError("Transfer package payload is invalid.")
+        records = package.get("records") or {}
+        attachments = list(package.get("attachments") or [])
+        if not isinstance(records, dict):
+            raise ValueError("Transfer records are invalid.")
+        attachment_map: Dict[str, Dict[str, Any]] = {}
+        imported_attachment_count = 0
+        for attachment in attachments:
+            if not isinstance(attachment, dict):
+                continue
+            payload_bytes = bytes.fromhex(sanitize_text(attachment.get("payload_hex"), max_chars=10_000_000))
+            digest = sanitize_text(attachment.get("digest"), max_chars=128)
+            if not digest or sha256_bytes(payload_bytes) != digest:
+                raise ValueError("Transfer attachment digest verification failed.")
+            stored = self.leafvault.store_bytes(
+                payload_bytes,
+                filename=sanitize_text(attachment.get("filename_hint") or digest, max_chars=200),
+                media_type=sanitize_text(attachment.get("media_type") or "application/octet-stream", max_chars=80),
+            )
+            stored.asset_type = sanitize_text(attachment.get("asset_type") or stored.asset_type, max_chars=32)
+            attachment_map[digest] = asdict(stored)
+            imported_attachment_count += 1
+
+        plant_map: Dict[str, str] = {}
+        thread_map: Dict[str, str] = {}
+        report_map: Dict[str, str] = {}
+        claim_map: Dict[str, str] = {}
+        peer_map: Dict[str, str] = {}
+        group_map: Dict[str, str] = {}
+        imported_plants = 0
+
+        for old_plant_id, raw in (records.get("plants") or {}).items():
+            if not isinstance(raw, dict):
+                continue
+            new_plant_id = sanitize_text(old_plant_id, max_chars=64)
+            if not new_plant_id or new_plant_id in (self.state.get("plants") or {}):
+                new_plant_id = f"plant-{uuid.uuid4().hex}"
+            plant_map[sanitize_text(old_plant_id, max_chars=64)] = new_plant_id
+            raw_passport = json.loads(json.dumps(raw, ensure_ascii=True))
+            raw_passport["plant_id"] = new_plant_id
+            raw_passport["source"] = sanitize_text(raw_passport.get("source") or "transfer-package", max_chars=120)
+            observations = []
+            for observation in list(raw_passport.get("observations") or []):
+                if not isinstance(observation, dict):
+                    continue
+                observation["observation_id"] = f"obs-{uuid.uuid4().hex}"
+                observation["plant_id"] = new_plant_id
+                assets = []
+                for raw_asset in list(observation.get("assets") or []):
+                    if not isinstance(raw_asset, dict):
+                        continue
+                    digest = sanitize_text(raw_asset.get("digest"), max_chars=128)
+                    mapped_asset = attachment_map.get(digest)
+                    if mapped_asset:
+                        assets.append(mapped_asset)
+                observation["assets"] = assets
+                observations.append(observation)
+            raw_passport["observations"] = observations
+            self.state.setdefault("plants", {})[new_plant_id] = raw_passport
+            imported_plants += 1
+
+        imported_manifests = 0
+        for old_plant_id, raw in (records.get("manifests") or {}).items():
+            if not isinstance(raw, dict):
+                continue
+            new_plant_id = plant_map.get(sanitize_text(old_plant_id, max_chars=64))
+            if not new_plant_id:
+                continue
+            manifest = json.loads(json.dumps(raw, ensure_ascii=True))
+            manifest["plant_id"] = new_plant_id
+            self.state.setdefault("manifests", {})[new_plant_id] = manifest
+            imported_manifests += 1
+
+        imported_counts = {
+            "diagnoses": 0,
+            "health_checkins": 0,
+            "shared_techniques": 0,
+            "guide_threads": 0,
+            "case_reports": 0,
+            "trust_claims": 0,
+            "claim_reviews": 0,
+            "peer_users": 0,
+            "pin_groups": 0,
+            "pin_group_comments": 0,
+            "peer_pin_requests": 0,
+        }
+
+        for raw in list(records.get("diagnoses") or []):
+            if not isinstance(raw, dict):
+                continue
+            plant_id_mapped = plant_map.get(sanitize_text(raw.get("plant_id"), max_chars=64))
+            if not plant_id_mapped:
+                continue
+            item = json.loads(json.dumps(raw, ensure_ascii=True))
+            item["diagnosis_id"] = f"dx-{uuid.uuid4().hex}"
+            item["plant_id"] = plant_id_mapped
+            self.state.setdefault("diagnoses", []).append(item)
+            imported_counts["diagnoses"] += 1
+
+        for raw in list(records.get("health_checkins") or []):
+            if not isinstance(raw, dict):
+                continue
+            plant_id_mapped = plant_map.get(sanitize_text(raw.get("plant_id"), max_chars=64))
+            if not plant_id_mapped:
+                continue
+            item = json.loads(json.dumps(raw, ensure_ascii=True))
+            item["checkin_id"] = f"checkin-{uuid.uuid4().hex}"
+            item["plant_id"] = plant_id_mapped
+            self.state.setdefault("health_checkins", []).append(item)
+            imported_counts["health_checkins"] += 1
+
+        for raw in list(records.get("shared_techniques") or []):
+            if not isinstance(raw, dict):
+                continue
+            plant_id_mapped = plant_map.get(sanitize_text(raw.get("plant_id"), max_chars=64))
+            if not plant_id_mapped:
+                continue
+            item = json.loads(json.dumps(raw, ensure_ascii=True))
+            item["technique_id"] = f"technique-{uuid.uuid4().hex}"
+            item["plant_id"] = plant_id_mapped
+            self.state.setdefault("shared_techniques", []).append(item)
+            imported_counts["shared_techniques"] += 1
+
+        for raw in list(records.get("guide_threads") or []):
+            if not isinstance(raw, dict):
+                continue
+            plant_id_mapped = plant_map.get(sanitize_text(raw.get("plant_id"), max_chars=64))
+            if not plant_id_mapped:
+                continue
+            item = json.loads(json.dumps(raw, ensure_ascii=True))
+            old_thread_id = sanitize_text(item.get("thread_id"), max_chars=64)
+            new_thread_id = f"thread-{uuid.uuid4().hex[:12]}"
+            thread_map[old_thread_id] = new_thread_id
+            item["thread_id"] = new_thread_id
+            item["plant_id"] = plant_id_mapped
+            item["image_path"] = ""
+            messages = []
+            for message in list(item.get("messages") or []):
+                if not isinstance(message, dict):
+                    continue
+                msg = json.loads(json.dumps(message, ensure_ascii=True))
+                msg["image_path"] = ""
+                messages.append(msg)
+            item["messages"] = messages
+            self.state.setdefault("guide_threads", []).append(item)
+            imported_counts["guide_threads"] += 1
+
+        for raw in list(records.get("case_reports") or []):
+            if not isinstance(raw, dict):
+                continue
+            plant_id_mapped = plant_map.get(sanitize_text(raw.get("plant_id"), max_chars=64))
+            if not plant_id_mapped:
+                continue
+            item = json.loads(json.dumps(raw, ensure_ascii=True))
+            old_report_id = sanitize_text(item.get("report_id"), max_chars=64)
+            new_report_id = f"report-{uuid.uuid4().hex}"
+            report_map[old_report_id] = new_report_id
+            item["report_id"] = new_report_id
+            item["plant_id"] = plant_id_mapped
+            item["thread_id"] = thread_map.get(sanitize_text(item.get("thread_id"), max_chars=64), "")
+            self.state.setdefault("case_reports", []).append(item)
+            imported_counts["case_reports"] += 1
+
+        for raw in list(records.get("trust_claims") or []):
+            if not isinstance(raw, dict):
+                continue
+            plant_id_mapped = plant_map.get(sanitize_text(raw.get("plant_id"), max_chars=64))
+            if not plant_id_mapped:
+                continue
+            item = json.loads(json.dumps(raw, ensure_ascii=True))
+            old_claim_id = sanitize_text(item.get("claim_id"), max_chars=64)
+            new_claim_id = f"claim-{uuid.uuid4().hex}"
+            claim_map[old_claim_id] = new_claim_id
+            item["claim_id"] = new_claim_id
+            item["plant_id"] = plant_id_mapped
+            item["report_id"] = report_map.get(sanitize_text(item.get("report_id"), max_chars=64), "")
+            self.state.setdefault("trust_claims", []).append(item)
+            imported_counts["trust_claims"] += 1
+
+        for raw in list(records.get("claim_reviews") or []):
+            if not isinstance(raw, dict):
+                continue
+            plant_id_mapped = plant_map.get(sanitize_text(raw.get("plant_id"), max_chars=64))
+            if not plant_id_mapped:
+                continue
+            item = json.loads(json.dumps(raw, ensure_ascii=True))
+            item["review_id"] = f"review-{uuid.uuid4().hex}"
+            item["plant_id"] = plant_id_mapped
+            item["claim_id"] = claim_map.get(sanitize_text(item.get("claim_id"), max_chars=64), "")
+            self.state.setdefault("claim_reviews", []).append(item)
+            imported_counts["claim_reviews"] += 1
+
+        for raw in list(records.get("peer_users") or []):
+            if not isinstance(raw, dict):
+                continue
+            item = json.loads(json.dumps(raw, ensure_ascii=True))
+            old_peer_id = sanitize_text(item.get("peer_id"), max_chars=64)
+            new_peer_id = f"peer-{uuid.uuid4().hex}"
+            peer_map[old_peer_id] = new_peer_id
+            item["peer_id"] = new_peer_id
+            self.state.setdefault("peer_users", []).append(item)
+            imported_counts["peer_users"] += 1
+
+        for raw in list(records.get("pin_groups") or []):
+            if not isinstance(raw, dict):
+                continue
+            item = json.loads(json.dumps(raw, ensure_ascii=True))
+            old_group_id = sanitize_text(item.get("group_id"), max_chars=64)
+            new_group_id = f"group-{uuid.uuid4().hex}"
+            group_map[old_group_id] = new_group_id
+            item["group_id"] = new_group_id
+            item["member_peer_ids"] = [peer_map.get(sanitize_text(peer_id, max_chars=64), "") for peer_id in list(item.get("member_peer_ids") or []) if peer_map.get(sanitize_text(peer_id, max_chars=64), "")]
+            self.state.setdefault("pin_groups", []).append(item)
+            imported_counts["pin_groups"] += 1
+
+        for raw in list(records.get("pin_group_comments") or []):
+            if not isinstance(raw, dict):
+                continue
+            item = json.loads(json.dumps(raw, ensure_ascii=True))
+            item["comment_id"] = f"comment-{uuid.uuid4().hex}"
+            item["group_id"] = group_map.get(sanitize_text(item.get("group_id"), max_chars=64), "")
+            item["plant_id"] = plant_map.get(sanitize_text(item.get("plant_id"), max_chars=64), "")
+            self.state.setdefault("pin_group_comments", []).append(item)
+            imported_counts["pin_group_comments"] += 1
+
+        for raw in list(records.get("peer_pin_requests") or []):
+            if not isinstance(raw, dict):
+                continue
+            item = json.loads(json.dumps(raw, ensure_ascii=True))
+            item["request_id"] = f"pinreq-{uuid.uuid4().hex}"
+            item["group_id"] = group_map.get(sanitize_text(item.get("group_id"), max_chars=64), "")
+            item["target_peer_ids"] = [peer_map.get(sanitize_text(peer_id, max_chars=64), "") for peer_id in list(item.get("target_peer_ids") or []) if peer_map.get(sanitize_text(peer_id, max_chars=64), "")]
+            self.state.setdefault("peer_pin_requests", []).append(item)
+            imported_counts["peer_pin_requests"] += 1
+
+        self._record_transfer_event(
+            "import",
+            {
+                "path": str(source),
+                "scope": sanitize_text(package.get("scope") or "unknown", max_chars=24),
+                "plant_count": imported_plants,
+                "attachment_count": imported_attachment_count,
+            },
+        )
+        self.save()
+        return {
+            "bundle_path": str(source),
+            "scope": sanitize_text(package.get("scope") or "unknown", max_chars=24),
+            "imported_plants": imported_plants,
+            "imported_manifests": imported_manifests,
+            "imported_attachments": imported_attachment_count,
+            **imported_counts,
+        }
+
+    def transfer_status(self) -> Dict[str, Any]:
+        history = self._transfer_history()
+        return {
+            "reports_dir": str(self.paths.reports_dir),
+            "bundle_count": len(list(self.paths.reports_dir.glob("*.kgx"))),
+            "export_count": len([item for item in history if sanitize_text(item.get("kind"), max_chars=40) == "export"]),
+            "import_count": len([item for item in history if sanitize_text(item.get("kind"), max_chars=40) == "import"]),
+            "recent_events": list(history[-12:]),
+        }
 
     def bootstrap_repository_data(self, *, force: bool = False) -> Dict[str, Any]:
         plants_path = REPO_ROOT / "data" / "plants.json"
@@ -4634,6 +5311,8 @@ if ctk is not None:
             self.trust_case_plant_var = tk.StringVar(value="")
             self.trust_case_thread_var = tk.StringVar(value="")
             self.trust_claim_var = tk.StringVar(value="")
+            self.transfer_plant_var = tk.StringVar(value="")
+            self.transfer_scope_var = tk.StringVar(value="current-plant")
             self.network_mode_var = tk.StringVar(value="local-first")
             self.local_first_var = tk.StringVar(value="on")
             self.cloud_mode_var = tk.StringVar(value="off")
@@ -5494,12 +6173,57 @@ if ctk is not None:
             self.nodes_entry.grid(row=78, column=0, padx=18, pady=6, sticky="ew")
             ctk.CTkButton(settings_frame, text="Save Settings", command=self.on_save_settings).grid(row=79, column=0, padx=18, pady=(10, 18), sticky="ew")
 
+            ctk.CTkLabel(settings_frame, text="Vault Hardening", font=ctk.CTkFont(size=18, weight="bold")).grid(row=80, column=0, padx=18, pady=(0, 8), sticky="w")
+            self._field_label(settings_frame, 81, "Current vault password", "Needed only when your existing vault key is already password protected.")
+            self.vault_current_password_entry = ctk.CTkEntry(settings_frame, placeholder_text="Current vault password", show="*")
+            self.vault_current_password_entry.grid(row=83, column=0, padx=18, pady=6, sticky="ew")
+            self._field_label(settings_frame, 84, "New vault password", "Use at least 8 characters. This protects the local storage key and can also be used during full key rotation.")
+            self.vault_new_password_entry = ctk.CTkEntry(settings_frame, placeholder_text="New vault password", show="*")
+            self.vault_new_password_entry.grid(row=86, column=0, padx=18, pady=6, sticky="ew")
+            vault_buttons = ctk.CTkFrame(settings_frame, fg_color="transparent")
+            vault_buttons.grid(row=87, column=0, padx=18, pady=(6, 16), sticky="ew")
+            vault_buttons.grid_columnconfigure(0, weight=1)
+            vault_buttons.grid_columnconfigure(1, weight=1)
+            ctk.CTkButton(vault_buttons, text="Set / Change Password", command=self.on_set_vault_password).grid(row=0, column=0, padx=(0, 6), sticky="ew")
+            ctk.CTkButton(vault_buttons, text="Rotate Data Key", command=self.on_rotate_vault_key).grid(row=0, column=1, padx=(6, 0), sticky="ew")
+
+            ctk.CTkLabel(settings_frame, text="Secure Transfer", font=ctk.CTkFont(size=18, weight="bold")).grid(row=88, column=0, padx=18, pady=(0, 8), sticky="w")
+            self._field_label(settings_frame, 89, "Transfer scope", "Current plant exports one plant and its care/trust records. Full garden exports all plant and community records except secrets.")
+            self.transfer_scope_menu = ctk.CTkOptionMenu(settings_frame, variable=self.transfer_scope_var, values=["current-plant", "full-garden"])
+            self.transfer_scope_menu.grid(row=91, column=0, padx=18, pady=6, sticky="ew")
+            self._field_label(settings_frame, 92, "Transfer plant", "Used only when the scope is current-plant.")
+            self.transfer_plant_picker = ctk.CTkOptionMenu(settings_frame, variable=self.transfer_plant_var, values=["No plants yet"])
+            self.transfer_plant_picker.grid(row=94, column=0, padx=18, pady=6, sticky="ew")
+            self._field_label(settings_frame, 95, "Bundle password", "This password encrypts the portable bundle itself. It is separate from the local vault password.")
+            self.transfer_password_entry = ctk.CTkEntry(settings_frame, placeholder_text="Bundle password", show="*")
+            self.transfer_password_entry.grid(row=97, column=0, padx=18, pady=6, sticky="ew")
+            self._field_label(settings_frame, 98, "Export bundle path", "Choose where the `.kgx` transfer bundle should be written.")
+            self.transfer_export_path_entry = ctk.CTkEntry(settings_frame, placeholder_text=str(self.runtime.paths.reports_dir / "garden-export.kgx"))
+            self.transfer_export_path_entry.grid(row=100, column=0, padx=18, pady=6, sticky="ew")
+            transfer_export_buttons = ctk.CTkFrame(settings_frame, fg_color="transparent")
+            transfer_export_buttons.grid(row=101, column=0, padx=18, pady=(6, 12), sticky="ew")
+            transfer_export_buttons.grid_columnconfigure(0, weight=1)
+            transfer_export_buttons.grid_columnconfigure(1, weight=1)
+            ctk.CTkButton(transfer_export_buttons, text="Choose Export Path", command=self.on_choose_transfer_export_path).grid(row=0, column=0, padx=(0, 6), sticky="ew")
+            ctk.CTkButton(transfer_export_buttons, text="Export Encrypted Bundle", command=self.on_export_transfer_bundle).grid(row=0, column=1, padx=(6, 0), sticky="ew")
+            self._field_label(settings_frame, 102, "Import bundle path", "Choose a `.kgx` file to merge into this local runtime. Imported records are re-sealed under this device's vault key.")
+            self.transfer_import_path_entry = ctk.CTkEntry(settings_frame, placeholder_text=str(self.runtime.paths.reports_dir / "incoming.kgx"))
+            self.transfer_import_path_entry.grid(row=104, column=0, padx=18, pady=6, sticky="ew")
+            transfer_import_buttons = ctk.CTkFrame(settings_frame, fg_color="transparent")
+            transfer_import_buttons.grid(row=105, column=0, padx=18, pady=(6, 18), sticky="ew")
+            transfer_import_buttons.grid_columnconfigure(0, weight=1)
+            transfer_import_buttons.grid_columnconfigure(1, weight=1)
+            ctk.CTkButton(transfer_import_buttons, text="Choose Import File", command=self.on_choose_transfer_import_path).grid(row=0, column=0, padx=(0, 6), sticky="ew")
+            ctk.CTkButton(transfer_import_buttons, text="Import Encrypted Bundle", command=self.on_import_transfer_bundle).grid(row=0, column=1, padx=(6, 0), sticky="ew")
+
             queue_frame = ctk.CTkFrame(scroll)
             queue_frame.grid(row=0, column=1, padx=(0, 18), pady=18, sticky="nsew")
             queue_frame.grid_columnconfigure(0, weight=1)
             queue_frame.grid_rowconfigure(1, weight=1)
             queue_frame.grid_rowconfigure(3, weight=1)
             queue_frame.grid_rowconfigure(5, weight=1)
+            queue_frame.grid_rowconfigure(7, weight=1)
+            queue_frame.grid_rowconfigure(9, weight=1)
             ctk.CTkLabel(queue_frame, text="Managed IPFS Status", font=ctk.CTkFont(size=20, weight="bold")).grid(row=0, column=0, padx=18, pady=(18, 10), sticky="w")
             self.daemon_status_text = self._make_textbox(queue_frame, height=220)
             self.daemon_status_text.grid(row=1, column=0, padx=18, pady=(0, 16), sticky="nsew")
@@ -5507,8 +6231,14 @@ if ctk is not None:
             self.secret_status_text = self._make_textbox(queue_frame, height=180)
             self.secret_status_text.grid(row=3, column=0, padx=18, pady=(0, 16), sticky="nsew")
             ctk.CTkLabel(queue_frame, text="Queue + Publishing State", font=ctk.CTkFont(size=18, weight="bold")).grid(row=4, column=0, padx=18, pady=(0, 10), sticky="w")
-            self.network_queue = self._make_textbox(queue_frame, height=260)
-            self.network_queue.grid(row=5, column=0, padx=18, pady=(0, 18), sticky="nsew")
+            self.network_queue = self._make_textbox(queue_frame, height=180)
+            self.network_queue.grid(row=5, column=0, padx=18, pady=(0, 16), sticky="nsew")
+            ctk.CTkLabel(queue_frame, text="Vault Security", font=ctk.CTkFont(size=18, weight="bold")).grid(row=6, column=0, padx=18, pady=(0, 10), sticky="w")
+            self.vault_security_text = self._make_textbox(queue_frame, height=180)
+            self.vault_security_text.grid(row=7, column=0, padx=18, pady=(0, 16), sticky="nsew")
+            ctk.CTkLabel(queue_frame, text="Transfer Status", font=ctk.CTkFont(size=18, weight="bold")).grid(row=8, column=0, padx=18, pady=(0, 10), sticky="w")
+            self.transfer_status_text = self._make_textbox(queue_frame, height=220)
+            self.transfer_status_text.grid(row=9, column=0, padx=18, pady=(0, 18), sticky="nsew")
 
         def _build_models_tab(self, tab: Any) -> None:
             tab.grid_columnconfigure(0, weight=1)
@@ -6134,6 +6864,50 @@ if ctk is not None:
                 "- Prefer challenge-response linking over copying identity secrets between devices.",
             ])
 
+        def _build_vault_security_text(self, status: Mapping[str, Any]) -> str:
+            latest = status.get("latest_transfer_event") or {}
+            lines = [
+                "Vault hardening",
+                "",
+                f"Crypto available: {status.get('crypto_available')}",
+                f"Key exists: {status.get('key_exists')}",
+                f"Password protected: {status.get('password_protected')}",
+                f"Key blob type: {status.get('key_blob_type') or 'n/a'}",
+                f"LeafVault objects: {status.get('leafvault_object_count', 0)}",
+                f"Sealed model present: {status.get('sealed_model_present')}",
+                f"Package files: {status.get('package_count', 0)}",
+                f"Key rotations: {status.get('key_rotation_events', 0)}",
+            ]
+            if latest:
+                lines.extend([
+                    "",
+                    "Latest event",
+                    f"- {latest.get('kind') or 'unknown'} at {latest.get('recorded_at') or 'n/a'}",
+                ])
+            return "\n".join(lines)
+
+        def _build_transfer_surface_text(self, status: Mapping[str, Any]) -> str:
+            events = list(status.get("recent_events") or [])
+            lines = [
+                "Secure transfer surface",
+                "",
+                f"Bundles in reports dir: {status.get('bundle_count', 0)}",
+                f"Exports: {status.get('export_count', 0)}",
+                f"Imports: {status.get('import_count', 0)}",
+                "",
+                "Safety rules",
+                "- Transfer bundles exclude network secrets and vault keys.",
+                "- Attachments are decrypted locally, then resealed under the bundle password.",
+                "- Imports reseal attachments under the destination vault key.",
+            ]
+            if events:
+                lines.extend(["", "Recent bundle events"])
+                for event in events[-5:]:
+                    lines.append(
+                        f"- {event.get('kind') or 'event'} · {event.get('recorded_at') or 'n/a'} · {event.get('path') or 'local-runtime'}"
+                    )
+            return "\n".join(lines)
+
         def _build_community_surface_text(self, summary: Mapping[str, Any]) -> str:
             peers = list(summary.get('peers') or [])
             groups = list(summary.get('groups') or [])
@@ -6313,6 +7087,8 @@ if ctk is not None:
             self._set_text(self.network_queue, self._build_network_settings_status_text(network_status))
             self._set_text(self.daemon_status_text, self._build_daemon_status_text(self.runtime.ipfs_daemon_status()))
             self._set_text(self.secret_status_text, self._build_secret_status_text(self.runtime.network_secret_status()))
+            self._set_text(self.vault_security_text, self._build_vault_security_text(self.runtime.vault_security_status()))
+            self._set_text(self.transfer_status_text, self._build_transfer_surface_text(self.runtime.transfer_status()))
             self._set_text(self.community_result, self._build_community_surface_text(self.runtime.community_summary()))
             self._set_text(self.network_surface_text, self._build_network_surface_summary())
             self._set_text(self.network_surface_feed, self._build_network_surface_feed())
@@ -6370,6 +7146,8 @@ if ctk is not None:
             self.guide_picker.configure(values=values)
             self.lab_picker.configure(values=values)
             self.community_post_plant_picker.configure(values=values)
+            if hasattr(self, "transfer_plant_picker"):
+                self.transfer_plant_picker.configure(values=values)
             if values[0] == "No plants yet":
                 self.observe_plant_var.set(values[0])
                 self.care_plant_var.set(values[0])
@@ -6378,6 +7156,8 @@ if ctk is not None:
                 self.community_plant_var.set(values[0])
                 if hasattr(self, "trust_case_plant_picker"):
                     self.trust_case_plant_var.set(values[0])
+                if hasattr(self, "transfer_plant_picker"):
+                    self.transfer_plant_var.set(values[0])
             else:
                 if self.observe_plant_var.get() not in lookup:
                     self.observe_plant_var.set(values[0])
@@ -6391,6 +7171,8 @@ if ctk is not None:
                     self.community_plant_var.set(values[0])
                 if hasattr(self, "trust_case_plant_picker") and self.trust_case_plant_var.get() not in lookup:
                     self.trust_case_plant_var.set(self.guide_plant_var.get() if self.guide_plant_var.get() in lookup else values[0])
+                if hasattr(self, "transfer_plant_picker") and self.transfer_plant_var.get() not in lookup:
+                    self.transfer_plant_var.set(values[0])
             self._sync_trust_menus()
 
         def _sync_trust_menus(self) -> None:
@@ -6893,6 +7675,95 @@ if ctk is not None:
             self._set_text(self.community_result, json.dumps(result, indent=2, ensure_ascii=True))
             self.refresh_all()
             self.status_var.set("Community action completed and queued for local-first sync.")
+
+        def on_choose_transfer_export_path(self) -> None:
+            selected = filedialog.asksaveasfilename(
+                title="Choose encrypted transfer bundle path",
+                defaultextension=".kgx",
+                filetypes=[("Kayla's Garden bundle", "*.kgx"), ("All files", "*.*")],
+                initialdir=str(self.runtime.paths.reports_dir),
+            )
+            if not selected:
+                return
+            self.transfer_export_path_entry.delete(0, "end")
+            self.transfer_export_path_entry.insert(0, selected)
+            self.status_var.set("Transfer export path selected.")
+
+        def on_choose_transfer_import_path(self) -> None:
+            selected = filedialog.askopenfilename(
+                title="Choose encrypted transfer bundle",
+                filetypes=[("Kayla's Garden bundle", "*.kgx"), ("All files", "*.*")],
+                initialdir=str(self.runtime.paths.reports_dir),
+            )
+            if not selected:
+                return
+            self.transfer_import_path_entry.delete(0, "end")
+            self.transfer_import_path_entry.insert(0, selected)
+            self.status_var.set("Transfer import bundle selected.")
+
+        def on_set_vault_password(self) -> None:
+            new_password = self.vault_new_password_entry.get()
+            if len(sanitize_text(new_password, max_chars=256)) < 8:
+                messagebox.showwarning("Kayla's Garden", "Enter a new vault password with at least 8 characters.")
+                return
+            current_password = self.vault_current_password_entry.get() or self.runtime.password
+            self._run_worker(
+                lambda: self.runtime.set_vault_password(new_password, current_password=current_password),
+                lambda result: self._after_action(f"Vault password updated.\n{json.dumps(result, indent=2, ensure_ascii=True)}"),
+                status="Protecting the local vault key with the new password...",
+            )
+
+        def on_rotate_vault_key(self) -> None:
+            new_password = self.vault_new_password_entry.get() or (self.runtime.password or "")
+            if new_password and len(sanitize_text(new_password, max_chars=256)) < 8:
+                messagebox.showwarning("Kayla's Garden", "New vault password must be at least 8 characters when set.")
+                return
+            current_password = self.vault_current_password_entry.get() or self.runtime.password
+            self._run_worker(
+                lambda: self.runtime.rotate_vault_key(new_password=new_password, current_password=current_password),
+                lambda result: self._after_action(f"Vault data key rotated.\n{json.dumps(result, indent=2, ensure_ascii=True)}"),
+                status="Re-sealing the vault, secrets, assets, and model under a fresh data key...",
+            )
+
+        def on_export_transfer_bundle(self) -> None:
+            bundle_password = sanitize_text(self.transfer_password_entry.get(), max_chars=256)
+            if len(bundle_password) < 8:
+                messagebox.showwarning("Kayla's Garden", "Enter a transfer bundle password with at least 8 characters.")
+                return
+            bundle_path = sanitize_text(self.transfer_export_path_entry.get(), max_chars=400)
+            if not bundle_path:
+                messagebox.showwarning("Kayla's Garden", "Choose an export path first.")
+                return
+            plant_id = None
+            if self.transfer_scope_var.get() == "current-plant":
+                plant_id = self._selected_plant_id(self.transfer_plant_var)
+                if not plant_id:
+                    messagebox.showwarning("Kayla's Garden", "Choose a plant for the current-plant export.")
+                    return
+            self._run_worker(
+                lambda: self.runtime.export_secure_bundle(
+                    bundle_path=bundle_path,
+                    bundle_password=bundle_password,
+                    plant_id=plant_id,
+                ),
+                lambda result: self._after_action(f"Encrypted bundle exported.\n{json.dumps(result, indent=2, ensure_ascii=True)}"),
+                status="Building encrypted transfer bundle...",
+            )
+
+        def on_import_transfer_bundle(self) -> None:
+            bundle_password = sanitize_text(self.transfer_password_entry.get(), max_chars=256)
+            if len(bundle_password) < 8:
+                messagebox.showwarning("Kayla's Garden", "Enter the transfer bundle password first.")
+                return
+            bundle_path = sanitize_text(self.transfer_import_path_entry.get(), max_chars=400)
+            if not bundle_path:
+                messagebox.showwarning("Kayla's Garden", "Choose an encrypted transfer bundle first.")
+                return
+            self._run_worker(
+                lambda: self.runtime.import_secure_bundle(bundle_path=bundle_path, bundle_password=bundle_password),
+                lambda result: self._after_action(f"Encrypted bundle imported.\n{json.dumps(result, indent=2, ensure_ascii=True)}"),
+                status="Importing bundle and re-sealing data into the local vault...",
+            )
 
         def on_start_ipfs_daemon(self) -> None:
             self.on_save_settings(show_dialog=False, refresh=False)
