@@ -4115,10 +4115,15 @@ if ctk is not None:
             self.ipfs_daemon_auto_start_var = tk.StringVar(value="off")
             self.hive_enabled_var = tk.StringVar(value="off")
             self.hive_broadcast_var = tk.StringVar(value="off")
+            self._placeholder_textboxes: list[Any] = []
+            self._muted_text_color = "#AAB3BA"
+            self._body_text_color = "#E8EEF2"
+            self._panel_color = "#3A3A3A"
+            self._panel_border_color = "#65707A"
 
             self.title("Kayla's Garden Studio")
-            self.geometry("1420x940")
-            self.minsize(1180, 820)
+            self.geometry("1500x980")
+            self.minsize(1240, 840)
             self.grid_columnconfigure(1, weight=1)
             self.grid_rowconfigure(0, weight=1)
 
@@ -4126,8 +4131,83 @@ if ctk is not None:
             self._build_tabs()
             self.refresh_all()
 
+        def _style_textbox(self, widget: Any) -> None:
+            textbox = getattr(widget, "_textbox", None)
+            if textbox is not None:
+                textbox.configure(
+                    wrap="word",
+                    padx=10,
+                    pady=10,
+                    spacing1=2,
+                    spacing3=2,
+                    insertbackground=self._body_text_color,
+                    relief="flat",
+                    borderwidth=0,
+                )
+            try:
+                widget.configure(
+                    fg_color=self._panel_color,
+                    border_width=1,
+                    border_color=self._panel_border_color,
+                    text_color=self._body_text_color,
+                    font=ctk.CTkFont(size=16),
+                    scrollbar_button_color="#5B646C",
+                    scrollbar_button_hover_color="#73808A",
+                )
+            except Exception:
+                pass
+
+        def _make_textbox(self, parent: Any, **kwargs: Any) -> Any:
+            widget = ctk.CTkTextbox(parent, **kwargs)
+            self._style_textbox(widget)
+            return widget
+
+        def _seed_textbox(self, widget: Any, placeholder: str) -> None:
+            self._style_textbox(widget)
+            widget.delete("1.0", "end")
+            widget.insert("1.0", placeholder)
+            try:
+                widget.configure(text_color=self._muted_text_color)
+            except Exception:
+                pass
+
+            def handle_focus_in(_event: Any, box: Any = widget, seed: str = placeholder) -> None:
+                current = box.get("1.0", "end-1c")
+                if current == seed:
+                    box.delete("1.0", "end")
+                    try:
+                        box.configure(text_color=self._body_text_color)
+                    except Exception:
+                        pass
+
+            def handle_focus_out(_event: Any, box: Any = widget, seed: str = placeholder) -> None:
+                current = box.get("1.0", "end-1c").strip()
+                if not current:
+                    box.delete("1.0", "end")
+                    box.insert("1.0", seed)
+                    try:
+                        box.configure(text_color=self._muted_text_color)
+                    except Exception:
+                        pass
+
+            widget.bind("<FocusIn>", handle_focus_in, add="+")
+            widget.bind("<FocusOut>", handle_focus_out, add="+")
+            self._placeholder_textboxes.append(widget)
+
+        def _textbox_value(self, widget: Any) -> str:
+            value = widget.get("1.0", "end-1c")
+            if widget in getattr(self, "_placeholder_textboxes", []):
+                text_color = None
+                try:
+                    text_color = widget.cget("text_color")
+                except Exception:
+                    text_color = None
+                if text_color == self._muted_text_color:
+                    return ""
+            return value.strip()
+
         def _build_sidebar(self) -> None:
-            sidebar = ctk.CTkFrame(self, width=260, corner_radius=0)
+            sidebar = ctk.CTkFrame(self, width=300, corner_radius=0)
             sidebar.grid(row=0, column=0, sticky="nsew")
             sidebar.grid_rowconfigure(99, weight=1)
 
@@ -4139,12 +4219,12 @@ if ctk is not None:
             ctk.CTkLabel(
                 sidebar,
                 text="Local-first plant tagging, secure storage, IPFS, and Hive checkpoints.",
-                wraplength=210,
+                wraplength=250,
                 justify="left",
                 text_color="#B7D7B0",
             ).grid(row=1, column=0, padx=20, pady=(0, 18), sticky="w")
 
-            self.identity_label = ctk.CTkLabel(sidebar, text="", wraplength=210, justify="left")
+            self.identity_label = ctk.CTkLabel(sidebar, text="", wraplength=250, justify="left")
             self.identity_label.grid(row=2, column=0, padx=20, pady=(0, 16), sticky="w")
 
             ctk.CTkButton(sidebar, text="Refresh", command=self.refresh_all).grid(row=3, column=0, padx=20, pady=6, sticky="ew")
@@ -4152,13 +4232,13 @@ if ctk is not None:
             ctk.CTkButton(sidebar, text="Verify LiteRT Model", command=self.on_verify_model).grid(row=5, column=0, padx=20, pady=6, sticky="ew")
             ctk.CTkButton(sidebar, text="Download LiteRT Model", command=self.on_download_model).grid(row=6, column=0, padx=20, pady=6, sticky="ew")
 
-            self.sidebar_metrics = ctk.CTkTextbox(sidebar, height=170)
+            self.sidebar_metrics = self._make_textbox(sidebar, height=190)
             self.sidebar_metrics.grid(row=7, column=0, padx=20, pady=(16, 10), sticky="nsew")
 
             ctk.CTkLabel(
                 sidebar,
                 textvariable=self.status_var,
-                wraplength=210,
+                wraplength=250,
                 justify="left",
                 text_color="#D6E8CF",
             ).grid(row=100, column=0, padx=20, pady=(12, 24), sticky="sw")
@@ -4166,6 +4246,18 @@ if ctk is not None:
         def _build_tabs(self) -> None:
             self.tabs = ctk.CTkTabview(self)
             self.tabs.grid(row=0, column=1, sticky="nsew", padx=18, pady=18)
+            try:
+                self.tabs.configure(
+                    fg_color="#242424",
+                    segmented_button_fg_color="#4A4A4A",
+                    segmented_button_selected_color="#3AB07B",
+                    segmented_button_selected_hover_color="#46C78D",
+                    segmented_button_unselected_hover_color="#5A5A5A",
+                    text_color=self._body_text_color,
+                    corner_radius=12,
+                )
+            except Exception:
+                pass
             self.tabs.add("Dashboard")
             self.tabs.add("Plants")
             self.tabs.add("Observe")
@@ -4194,7 +4286,7 @@ if ctk is not None:
             ctk.CTkLabel(tab, text="Garden Overview", font=ctk.CTkFont(size=24, weight="bold")).grid(
                 row=0, column=0, padx=18, pady=(18, 8), sticky="w"
             )
-            self.dashboard_summary = ctk.CTkTextbox(tab)
+            self.dashboard_summary = self._make_textbox(tab)
             self.dashboard_summary.grid(row=1, column=0, padx=18, pady=(0, 18), sticky="nsew")
 
             right = ctk.CTkFrame(tab)
@@ -4205,7 +4297,7 @@ if ctk is not None:
             ctk.CTkLabel(right, text="Anchor + Sync Queue", font=ctk.CTkFont(size=18, weight="bold")).grid(
                 row=0, column=0, padx=18, pady=(18, 10), sticky="w"
             )
-            self.dashboard_queue = ctk.CTkTextbox(right)
+            self.dashboard_queue = self._make_textbox(right)
             self.dashboard_queue.grid(row=1, column=0, padx=18, pady=(0, 18), sticky="nsew")
 
         def _build_plants_tab(self, tab: Any) -> None:
@@ -4227,9 +4319,9 @@ if ctk is not None:
             self.plant_species_entry.grid(row=2, column=0, padx=18, pady=6, sticky="ew")
             self.plant_zone_entry = ctk.CTkEntry(form, placeholder_text="Hardiness zone")
             self.plant_zone_entry.grid(row=3, column=0, padx=18, pady=6, sticky="ew")
-            self.plant_notes_box = ctk.CTkTextbox(form, height=140)
+            self.plant_notes_box = self._make_textbox(form, height=140)
             self.plant_notes_box.grid(row=4, column=0, padx=18, pady=6, sticky="ew")
-            self.plant_notes_box.insert("1.0", "Plant notes, bed details, or care context")
+            self._seed_textbox(self.plant_notes_box, "Plant notes, bed details, or care context")
             self.plant_privacy_menu = ctk.CTkOptionMenu(form, values=["private", "shared", "public"])
             self.plant_privacy_menu.grid(row=5, column=0, padx=18, pady=6, sticky="ew")
             ctk.CTkButton(form, text="Add Plant Passport", command=self.on_add_plant).grid(
@@ -4240,12 +4332,12 @@ if ctk is not None:
             right.grid(row=0, column=1, rowspan=2, padx=(0, 18), pady=18, sticky="nsew")
             right.grid_columnconfigure(0, weight=1)
             right.grid_rowconfigure(1, weight=1)
-            right.grid_rowconfigure(4, weight=1)
+            right.grid_rowconfigure(5, weight=1)
 
             ctk.CTkLabel(right, text="Plant Passports", font=ctk.CTkFont(size=20, weight="bold")).grid(
                 row=0, column=0, padx=18, pady=(18, 10), sticky="w"
             )
-            self.plants_text = ctk.CTkTextbox(right)
+            self.plants_text = self._make_textbox(right)
             self.plants_text.grid(row=1, column=0, padx=18, pady=(0, 16), sticky="nsew")
 
             self.care_picker = ctk.CTkOptionMenu(right, variable=self.care_plant_var, values=["No plants yet"])
@@ -4255,7 +4347,7 @@ if ctk is not None:
             ctk.CTkButton(right, text="Generate Care Brief", command=self.on_care_brief).grid(
                 row=4, column=0, padx=18, pady=(6, 10), sticky="new"
             )
-            self.care_text = ctk.CTkTextbox(right, height=180)
+            self.care_text = self._make_textbox(right, height=180)
             self.care_text.grid(row=5, column=0, padx=18, pady=(0, 18), sticky="nsew")
 
         def _build_observe_tab(self, tab: Any) -> None:
@@ -4280,9 +4372,9 @@ if ctk is not None:
             self.observe_tags_entry.grid(row=4, column=0, padx=18, pady=6, sticky="ew")
             self.observe_privacy_menu = ctk.CTkOptionMenu(form, values=["private", "shared", "public"])
             self.observe_privacy_menu.grid(row=5, column=0, padx=18, pady=6, sticky="ew")
-            self.observe_note_box = ctk.CTkTextbox(form, height=220)
+            self.observe_note_box = self._make_textbox(form, height=220)
             self.observe_note_box.grid(row=6, column=0, padx=18, pady=6, sticky="ew")
-            self.observe_note_box.insert("1.0", "Describe what you see in the plant image or in person.")
+            self._seed_textbox(self.observe_note_box, "Describe what you see in the plant image or in person.")
             ctk.CTkButton(form, text="Choose Plant Image", command=self.on_pick_image).grid(
                 row=7, column=0, padx=18, pady=(8, 6), sticky="ew"
             )
@@ -4300,7 +4392,7 @@ if ctk is not None:
             ctk.CTkLabel(right, text="Published Observation", font=ctk.CTkFont(size=20, weight="bold")).grid(
                 row=0, column=0, padx=18, pady=(18, 10), sticky="w"
             )
-            self.observe_result = ctk.CTkTextbox(right)
+            self.observe_result = self._make_textbox(right)
             self.observe_result.grid(row=1, column=0, padx=18, pady=(0, 18), sticky="nsew")
 
         def _build_guide_tab(self, tab: Any) -> None:
@@ -4317,10 +4409,10 @@ if ctk is not None:
             )
             self.guide_picker = ctk.CTkOptionMenu(left, variable=self.guide_plant_var, values=["No plants yet"])
             self.guide_picker.grid(row=1, column=0, padx=18, pady=6, sticky="ew")
-            self.guide_question_box = ctk.CTkTextbox(left, height=260)
+            self.guide_question_box = self._make_textbox(left, height=260)
             self.guide_question_box.grid(row=2, column=0, padx=18, pady=6, sticky="ew")
-            self.guide_question_box.insert(
-                "1.0",
+            self._seed_textbox(
+                self.guide_question_box,
                 "Tell me what changed since the last photos, what looks most likely right now, and what I should inspect next.",
             )
             ctk.CTkButton(left, text="Choose Current Context Image", command=self.on_pick_guide_image).grid(
@@ -4339,7 +4431,7 @@ if ctk is not None:
             ctk.CTkLabel(right, text="Guide Response", font=ctk.CTkFont(size=20, weight="bold")).grid(
                 row=0, column=0, padx=18, pady=(18, 10), sticky="w"
             )
-            self.guide_result = ctk.CTkTextbox(right)
+            self.guide_result = self._make_textbox(right)
             self.guide_result.grid(row=1, column=0, padx=18, pady=(0, 18), sticky="nsew")
 
         def _build_care_lab_tab(self, tab: Any) -> None:
@@ -4358,9 +4450,9 @@ if ctk is not None:
             self.lab_picker.grid(row=1, column=0, padx=18, pady=6, sticky="ew")
             self.lab_tags_entry = ctk.CTkEntry(left, placeholder_text="Lab tags, comma separated")
             self.lab_tags_entry.grid(row=2, column=0, padx=18, pady=6, sticky="ew")
-            self.diagnosis_note_box = ctk.CTkTextbox(left, height=180)
+            self.diagnosis_note_box = self._make_textbox(left, height=180)
             self.diagnosis_note_box.grid(row=3, column=0, padx=18, pady=6, sticky="ew")
-            self.diagnosis_note_box.insert("1.0", "Describe the plant problem, visible symptoms, spread pattern, and what changed.")
+            self._seed_textbox(self.diagnosis_note_box, "Describe the plant problem, visible symptoms, spread pattern, and what changed.")
             ctk.CTkButton(left, text="Choose Diagnosis Image", command=self.on_pick_lab_image).grid(
                 row=4, column=0, padx=18, pady=(8, 6), sticky="ew"
             )
@@ -4369,9 +4461,9 @@ if ctk is not None:
             ctk.CTkButton(left, text="Run Problem Diagnosis", command=self.on_diagnose_problem).grid(
                 row=6, column=0, padx=18, pady=(8, 16), sticky="ew"
             )
-            self.checkin_note_box = ctk.CTkTextbox(left, height=140)
+            self.checkin_note_box = self._make_textbox(left, height=140)
             self.checkin_note_box.grid(row=7, column=0, padx=18, pady=6, sticky="ew")
-            self.checkin_note_box.insert("1.0", "Short health check-in note: growth, moisture, pests, recovery, stress, flowering, etc.")
+            self._seed_textbox(self.checkin_note_box, "Short health check-in note: growth, moisture, pests, recovery, stress, flowering, etc.")
             ctk.CTkButton(left, text="Save Health Check-In", command=self.on_record_health_checkin).grid(
                 row=8, column=0, padx=18, pady=(8, 18), sticky="ew"
             )
@@ -4392,16 +4484,16 @@ if ctk is not None:
             self.technique_tags_entry.grid(row=3, column=0, padx=18, pady=6, sticky="ew")
             self.technique_privacy_menu = ctk.CTkOptionMenu(right, values=["private", "shared", "public"])
             self.technique_privacy_menu.grid(row=4, column=0, padx=18, pady=6, sticky="ew")
-            self.technique_summary_box = ctk.CTkTextbox(right, height=120)
+            self.technique_summary_box = self._make_textbox(right, height=120)
             self.technique_summary_box.grid(row=5, column=0, padx=18, pady=6, sticky="ew")
-            self.technique_summary_box.insert("1.0", "Describe the technique, when it helped, and any caveats.")
-            self.technique_steps_box = ctk.CTkTextbox(right, height=120)
+            self._seed_textbox(self.technique_summary_box, "Describe the technique, when it helped, and any caveats.")
+            self.technique_steps_box = self._make_textbox(right, height=120)
             self.technique_steps_box.grid(row=6, column=0, padx=18, pady=6, sticky="ew")
-            self.technique_steps_box.insert("1.0", "One step per line")
+            self._seed_textbox(self.technique_steps_box, "One step per line")
             ctk.CTkButton(right, text="Publish Shared Technique", command=self.on_publish_technique).grid(
                 row=7, column=0, padx=18, pady=(8, 10), sticky="new"
             )
-            self.care_lab_result = ctk.CTkTextbox(right)
+            self.care_lab_result = self._make_textbox(right)
             self.care_lab_result.grid(row=8, column=0, padx=18, pady=(0, 18), sticky="nsew")
 
         def _build_insights_tab(self, tab: Any) -> None:
@@ -4417,12 +4509,12 @@ if ctk is not None:
             ctk.CTkLabel(left, text="Garden Digest", font=ctk.CTkFont(size=20, weight="bold")).grid(
                 row=0, column=0, padx=18, pady=(18, 10), sticky="w"
             )
-            self.insights_digest = ctk.CTkTextbox(left, height=220)
+            self.insights_digest = self._make_textbox(left, height=220)
             self.insights_digest.grid(row=1, column=0, padx=18, pady=(0, 16), sticky="nsew")
             ctk.CTkLabel(left, text="Watchlist", font=ctk.CTkFont(size=18, weight="bold")).grid(
                 row=2, column=0, padx=18, pady=(0, 10), sticky="w"
             )
-            self.insights_watchlist = ctk.CTkTextbox(left)
+            self.insights_watchlist = self._make_textbox(left)
             self.insights_watchlist.grid(row=3, column=0, padx=18, pady=(0, 18), sticky="nsew")
 
             right = ctk.CTkFrame(tab)
@@ -4432,16 +4524,20 @@ if ctk is not None:
             ctk.CTkLabel(right, text="Activity Timeline", font=ctk.CTkFont(size=20, weight="bold")).grid(
                 row=0, column=0, padx=18, pady=(18, 10), sticky="w"
             )
-            self.insights_activity = ctk.CTkTextbox(right)
+            self.insights_activity = self._make_textbox(right)
             self.insights_activity.grid(row=1, column=0, padx=18, pady=(0, 18), sticky="nsew")
 
         def _build_community_tab(self, tab: Any) -> None:
-            tab.grid_columnconfigure(0, weight=2)
-            tab.grid_columnconfigure(1, weight=3)
+            tab.grid_columnconfigure(0, weight=1)
             tab.grid_rowconfigure(0, weight=1)
 
-            left = ctk.CTkFrame(tab)
-            left.grid(row=0, column=0, padx=18, pady=18, sticky="nsew")
+            scroll = ctk.CTkScrollableFrame(tab)
+            scroll.grid(row=0, column=0, padx=0, pady=0, sticky="nsew")
+            scroll.grid_columnconfigure(0, weight=2)
+            scroll.grid_columnconfigure(1, weight=3)
+
+            left = ctk.CTkFrame(scroll)
+            left.grid(row=0, column=0, padx=18, pady=18, sticky="new")
             left.grid_columnconfigure(0, weight=1)
 
             ctk.CTkLabel(left, text="Peer Gardeners", font=ctk.CTkFont(size=20, weight="bold")).grid(
@@ -4455,14 +4551,14 @@ if ctk is not None:
             self.peer_ipfs_user_id_entry.grid(row=3, column=0, padx=18, pady=6, sticky="ew")
             self.peer_pin_group_entry = ctk.CTkEntry(left, placeholder_text="Preferred pin group")
             self.peer_pin_group_entry.grid(row=4, column=0, padx=18, pady=6, sticky="ew")
-            self.peer_notes_box = ctk.CTkTextbox(left, height=90)
+            self.peer_notes_box = self._make_textbox(left, height=90)
             self.peer_notes_box.grid(row=5, column=0, padx=18, pady=6, sticky="ew")
-            self.peer_notes_box.insert("1.0", "Notes about what this plant user likes to pin or comment on.")
+            self._seed_textbox(self.peer_notes_box, "Notes about what this plant user likes to pin or comment on.")
             ctk.CTkButton(left, text="Add Active Plant User", command=self.on_add_peer_user).grid(
                 row=6, column=0, padx=18, pady=(8, 18), sticky="ew"
             )
 
-            right = ctk.CTkFrame(tab)
+            right = ctk.CTkFrame(scroll)
             right.grid(row=0, column=1, padx=(0, 18), pady=18, sticky="nsew")
             right.grid_columnconfigure(0, weight=1)
             right.grid_rowconfigure(13, weight=1)
@@ -4472,9 +4568,9 @@ if ctk is not None:
             )
             self.community_group_name_entry = ctk.CTkEntry(right, placeholder_text="Pin group name")
             self.community_group_name_entry.grid(row=1, column=0, padx=18, pady=6, sticky="ew")
-            self.community_group_description_box = ctk.CTkTextbox(right, height=90)
+            self.community_group_description_box = self._make_textbox(right, height=90)
             self.community_group_description_box.grid(row=2, column=0, padx=18, pady=6, sticky="ew")
-            self.community_group_description_box.insert("1.0", "Describe the group purpose, plant types, or pin behavior.")
+            self._seed_textbox(self.community_group_description_box, "Describe the group purpose, plant types, or pin behavior.")
             self.community_group_privacy_menu = ctk.CTkOptionMenu(right, values=["private", "shared", "public"])
             self.community_group_privacy_menu.grid(row=3, column=0, padx=18, pady=6, sticky="ew")
             ctk.CTkButton(right, text="Create Pin Group", command=self.on_create_pin_group).grid(
@@ -4484,9 +4580,9 @@ if ctk is not None:
             self.community_post_plant_picker.grid(row=5, column=0, padx=18, pady=6, sticky="ew")
             self.community_target_cids_entry = ctk.CTkEntry(right, placeholder_text="Target CIDs, comma separated")
             self.community_target_cids_entry.grid(row=6, column=0, padx=18, pady=6, sticky="ew")
-            self.community_comment_box = ctk.CTkTextbox(right, height=100)
+            self.community_comment_box = self._make_textbox(right, height=100)
             self.community_comment_box.grid(row=7, column=0, padx=18, pady=6, sticky="ew")
-            self.community_comment_box.insert("1.0", "Comment under this plant user group and point peers at useful plant content.")
+            self._seed_textbox(self.community_comment_box, "Comment under this plant user group and point peers at useful plant content.")
             ctk.CTkButton(right, text="Post Group Comment", command=self.on_post_pin_group_comment).grid(
                 row=8, column=0, padx=18, pady=(8, 12), sticky="ew"
             )
@@ -4494,22 +4590,26 @@ if ctk is not None:
             self.community_pin_request_cid_entry.grid(row=9, column=0, padx=18, pady=6, sticky="ew")
             self.community_pin_request_peers_entry = ctk.CTkEntry(right, placeholder_text="Target peer ids, comma separated")
             self.community_pin_request_peers_entry.grid(row=10, column=0, padx=18, pady=6, sticky="ew")
-            self.community_pin_request_note_box = ctk.CTkTextbox(right, height=80)
+            self.community_pin_request_note_box = self._make_textbox(right, height=80)
             self.community_pin_request_note_box.grid(row=11, column=0, padx=18, pady=6, sticky="ew")
-            self.community_pin_request_note_box.insert("1.0", "Why should peers pin this content for faster access?")
+            self._seed_textbox(self.community_pin_request_note_box, "Why should peers pin this content for faster access?")
             ctk.CTkButton(right, text="Queue Peer Pin Request", command=self.on_request_peer_pin).grid(
                 row=12, column=0, padx=18, pady=(8, 10), sticky="ew"
             )
-            self.community_result = ctk.CTkTextbox(right)
+            self.community_result = self._make_textbox(right, height=220)
             self.community_result.grid(row=13, column=0, padx=18, pady=(0, 18), sticky="nsew")
 
         def _build_network_tab(self, tab: Any) -> None:
-            tab.grid_columnconfigure(0, weight=2)
-            tab.grid_columnconfigure(1, weight=3)
+            tab.grid_columnconfigure(0, weight=1)
             tab.grid_rowconfigure(0, weight=1)
 
-            settings_frame = ctk.CTkFrame(tab)
-            settings_frame.grid(row=0, column=0, padx=18, pady=18, sticky="nsew")
+            scroll = ctk.CTkScrollableFrame(tab)
+            scroll.grid(row=0, column=0, padx=0, pady=0, sticky="nsew")
+            scroll.grid_columnconfigure(0, weight=2)
+            scroll.grid_columnconfigure(1, weight=3)
+
+            settings_frame = ctk.CTkFrame(scroll)
+            settings_frame.grid(row=0, column=0, padx=18, pady=18, sticky="new")
             settings_frame.grid_columnconfigure(0, weight=1)
 
             ctk.CTkLabel(settings_frame, text="Garden Settings", font=ctk.CTkFont(size=20, weight="bold")).grid(
@@ -4587,7 +4687,7 @@ if ctk is not None:
                 row=30, column=0, padx=18, pady=(10, 18), sticky="ew"
             )
 
-            queue_frame = ctk.CTkFrame(tab)
+            queue_frame = ctk.CTkFrame(scroll)
             queue_frame.grid(row=0, column=1, padx=(0, 18), pady=18, sticky="nsew")
             queue_frame.grid_columnconfigure(0, weight=1)
             queue_frame.grid_rowconfigure(1, weight=1)
@@ -4596,17 +4696,17 @@ if ctk is not None:
             ctk.CTkLabel(queue_frame, text="Managed IPFS Status", font=ctk.CTkFont(size=20, weight="bold")).grid(
                 row=0, column=0, padx=18, pady=(18, 10), sticky="w"
             )
-            self.daemon_status_text = ctk.CTkTextbox(queue_frame, height=220)
+            self.daemon_status_text = self._make_textbox(queue_frame, height=220)
             self.daemon_status_text.grid(row=1, column=0, padx=18, pady=(0, 16), sticky="nsew")
             ctk.CTkLabel(queue_frame, text="Encrypted Credential Status", font=ctk.CTkFont(size=18, weight="bold")).grid(
                 row=2, column=0, padx=18, pady=(0, 10), sticky="w"
             )
-            self.secret_status_text = ctk.CTkTextbox(queue_frame, height=180)
+            self.secret_status_text = self._make_textbox(queue_frame, height=180)
             self.secret_status_text.grid(row=3, column=0, padx=18, pady=(0, 16), sticky="nsew")
             ctk.CTkLabel(queue_frame, text="Queue + Publishing State", font=ctk.CTkFont(size=18, weight="bold")).grid(
                 row=4, column=0, padx=18, pady=(0, 10), sticky="w"
             )
-            self.network_queue = ctk.CTkTextbox(queue_frame)
+            self.network_queue = self._make_textbox(queue_frame)
             self.network_queue.grid(row=5, column=0, padx=18, pady=(0, 18), sticky="nsew")
 
         def _build_models_tab(self, tab: Any) -> None:
@@ -4625,11 +4725,16 @@ if ctk is not None:
             ctk.CTkButton(buttons, text="Refresh Model Status", command=self.refresh_all).grid(row=0, column=0, padx=(0, 8), sticky="ew")
             ctk.CTkButton(buttons, text="Verify Model Hash", command=self.on_verify_model).grid(row=0, column=1, padx=(8, 0), sticky="ew")
 
-            self.models_text = ctk.CTkTextbox(tab)
+            self.models_text = self._make_textbox(tab)
             self.models_text.grid(row=1, column=0, padx=18, pady=(0, 18), sticky="nsew")
 
         def _set_text(self, widget: Any, text: str) -> None:
+            self._style_textbox(widget)
             widget.delete("1.0", "end")
+            try:
+                widget.configure(text_color=self._body_text_color)
+            except Exception:
+                pass
             widget.insert("1.0", text)
 
         def _selected_plant_id(self, variable: tk.StringVar) -> Optional[str]:
@@ -4643,7 +4748,7 @@ if ctk is not None:
                 try:
                     result = func()
                 except Exception as exc:
-                    self.after(0, lambda: self._handle_error(exc))
+                    self.after(0, lambda exc=exc: self._handle_error(exc))
                     return
                 self.after(0, lambda: on_success(result))
 
@@ -4816,7 +4921,7 @@ if ctk is not None:
                         name=name,
                         species=species or name,
                         hardiness_zone=sanitize_text(self.plant_zone_entry.get(), max_chars=64),
-                        notes=sanitize_text(self.plant_notes_box.get("1.0", "end"), max_chars=2000),
+                        notes=sanitize_text(self._textbox_value(self.plant_notes_box), max_chars=2000),
                         privacy_class=self.plant_privacy_menu.get(),
                     )
                 )
@@ -4853,7 +4958,7 @@ if ctk is not None:
             if not plant_id:
                 messagebox.showwarning("Kayla's Garden", "Create or choose a plant first.")
                 return
-            note = sanitize_text(self.observe_note_box.get("1.0", "end"), max_chars=1200)
+            note = sanitize_text(self._textbox_value(self.observe_note_box), max_chars=1200)
             if not note:
                 messagebox.showwarning("Kayla's Garden", "Enter an observation note first.")
                 return
@@ -4900,7 +5005,7 @@ if ctk is not None:
             if not plant_id:
                 messagebox.showwarning("Kayla's Garden", "Choose a plant passport first.")
                 return
-            question = sanitize_text(self.guide_question_box.get("1.0", "end"), max_chars=1400)
+            question = sanitize_text(self._textbox_value(self.guide_question_box), max_chars=1400)
             if not question:
                 messagebox.showwarning("Kayla's Garden", "Enter a plant question first.")
                 return
@@ -4915,7 +5020,7 @@ if ctk is not None:
             if not plant_id:
                 messagebox.showwarning("Kayla's Garden", "Choose a plant passport first.")
                 return
-            symptom_note = sanitize_text(self.diagnosis_note_box.get("1.0", "end"), max_chars=1400)
+            symptom_note = sanitize_text(self._textbox_value(self.diagnosis_note_box), max_chars=1400)
             if not symptom_note:
                 messagebox.showwarning("Kayla's Garden", "Describe the plant problem first.")
                 return
@@ -4936,7 +5041,7 @@ if ctk is not None:
             if not plant_id:
                 messagebox.showwarning("Kayla's Garden", "Choose a plant passport first.")
                 return
-            note = sanitize_text(self.checkin_note_box.get("1.0", "end"), max_chars=1200)
+            note = sanitize_text(self._textbox_value(self.checkin_note_box), max_chars=1200)
             tags = [item.strip() for item in self.lab_tags_entry.get().split(",") if item.strip()]
             self._run_worker(
                 lambda: self.runtime.record_health_checkin(
@@ -4955,11 +5060,11 @@ if ctk is not None:
                 messagebox.showwarning("Kayla's Garden", "Choose a plant passport first.")
                 return
             title = sanitize_text(self.technique_title_entry.get(), max_chars=160)
-            summary = sanitize_text(self.technique_summary_box.get("1.0", "end"), max_chars=2000)
+            summary = sanitize_text(self._textbox_value(self.technique_summary_box), max_chars=2000)
             if not title or not summary:
                 messagebox.showwarning("Kayla's Garden", "Enter at least a technique title and summary.")
                 return
-            steps = [item.strip() for item in self.technique_steps_box.get("1.0", "end").splitlines() if item.strip()]
+            steps = [item.strip() for item in self._textbox_value(self.technique_steps_box).splitlines() if item.strip()]
             tags = [item.strip() for item in self.technique_tags_entry.get().split(",") if item.strip()]
             self._run_worker(
                 lambda: self.runtime.share_technique(
@@ -5014,7 +5119,7 @@ if ctk is not None:
                     hive_username=sanitize_text(self.peer_hive_username_entry.get(), max_chars=80),
                     ipfs_user_id=sanitize_text(self.peer_ipfs_user_id_entry.get(), max_chars=160),
                     pin_group=sanitize_text(self.peer_pin_group_entry.get(), max_chars=160),
-                    notes=sanitize_text(self.peer_notes_box.get("1.0", "end"), max_chars=1200),
+                    notes=sanitize_text(self._textbox_value(self.peer_notes_box), max_chars=1200),
                 ),
                 self._after_community_action,
                 status="Adding active plant user to the community graph...",
@@ -5025,7 +5130,7 @@ if ctk is not None:
             if not group_name:
                 messagebox.showwarning("Kayla's Garden", "Enter a pin group name first.")
                 return
-            description = sanitize_text(self.community_group_description_box.get("1.0", "end"), max_chars=2000)
+            description = sanitize_text(self._textbox_value(self.community_group_description_box), max_chars=2000)
             self._run_worker(
                 lambda: self.runtime.create_pin_group(
                     name=group_name,
@@ -5042,7 +5147,7 @@ if ctk is not None:
             if not group_ref:
                 messagebox.showwarning("Kayla's Garden", "Enter a pin group name first.")
                 return
-            body = sanitize_text(self.community_comment_box.get("1.0", "end"), max_chars=4000)
+            body = sanitize_text(self._textbox_value(self.community_comment_box), max_chars=4000)
             if not body:
                 messagebox.showwarning("Kayla's Garden", "Enter a community comment first.")
                 return
@@ -5066,7 +5171,7 @@ if ctk is not None:
                 messagebox.showwarning("Kayla's Garden", "Enter both a pin group and a CID first.")
                 return
             target_peer_ids = [item.strip() for item in self.community_pin_request_peers_entry.get().split(",") if item.strip()]
-            note = sanitize_text(self.community_pin_request_note_box.get("1.0", "end"), max_chars=2000)
+            note = sanitize_text(self._textbox_value(self.community_pin_request_note_box), max_chars=2000)
             self._run_worker(
                 lambda: self.runtime.request_peer_pin(
                     group_ref=group_ref,
