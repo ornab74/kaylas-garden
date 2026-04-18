@@ -46,3 +46,6 @@ next-env.d.ts
 __pycache__/main.cpython-311.pyc
 .codex
 .kaylas-garden-runtime/garden_vault.json.aes
+default.profraw
+.kaylas-garden-runtime/settings.json
+
