@@ -35,7 +35,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, date, datetime
 from pathlib import Path
 from threading import RLock
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Tuple, Union
 
 import tkinter as tk
 from tkinter import filedialog, messagebox
@@ -404,6 +404,64 @@ class PeerPinRequest:
     target_peer_ids: List[str]
     note: str
     local_pin_status: str
+    metadata_cid: Optional[str] = None
+    checkpoint_id: Optional[str] = None
+    sync_job_id: Optional[str] = None
+
+
+@dataclass
+class GuideCaseReport:
+    report_id: str
+    plant_id: str
+    thread_id: str
+    created_at: str
+    author_sync_id: str
+    title: str
+    summary: str
+    claim_focus: str
+    privacy_class: str
+    message_count: int
+    evidence_count: int
+    confidence: float
+    evidence_refs: List[str] = field(default_factory=list)
+    metadata_cid: Optional[str] = None
+    checkpoint_id: Optional[str] = None
+    sync_job_id: Optional[str] = None
+
+
+@dataclass
+class TrustClaim:
+    claim_id: str
+    plant_id: str
+    report_id: str
+    created_at: str
+    author_sync_id: str
+    title: str
+    claim_text: str
+    claim_kind: str
+    confidence: float
+    status: str
+    evidence_refs: List[str] = field(default_factory=list)
+    review_count: int = 0
+    accepts: int = 0
+    challenges: int = 0
+    metadata_cid: Optional[str] = None
+    checkpoint_id: Optional[str] = None
+    sync_job_id: Optional[str] = None
+
+
+@dataclass
+class ClaimReview:
+    review_id: str
+    claim_id: str
+    plant_id: str
+    created_at: str
+    reviewer_sync_id: str
+    reviewer_label: str
+    verdict: str
+    rationale: str
+    evidence_note: str
+    uncertainty_delta: float
     metadata_cid: Optional[str] = None
     checkpoint_id: Optional[str] = None
     sync_job_id: Optional[str] = None
@@ -946,6 +1004,7 @@ class EncryptedGardenVault:
             "sync_identity": None,
             "plants": {},
             "manifests": {},
+            "guide_threads": [],
             "diagnoses": [],
             "health_checkins": [],
             "shared_techniques": [],
@@ -953,6 +1012,9 @@ class EncryptedGardenVault:
             "pin_groups": [],
             "pin_group_comments": [],
             "peer_pin_requests": [],
+            "case_reports": [],
+            "trust_claims": [],
+            "claim_reviews": [],
             "anchor_queue": [],
             "sync_queue": [],
             "reputation": {},
@@ -1245,6 +1307,67 @@ def peer_pin_request_from_dict(raw: Mapping[str, Any]) -> PeerPinRequest:
         target_peer_ids=[sanitize_text(item, max_chars=64) for item in list(raw.get("target_peer_ids") or []) if sanitize_text(item, max_chars=64)],
         note=sanitize_text(raw.get("note"), max_chars=2000),
         local_pin_status=sanitize_text(raw.get("local_pin_status") or "queued-local", max_chars=80),
+        metadata_cid=sanitize_text(raw.get("metadata_cid"), max_chars=160) or None,
+        checkpoint_id=sanitize_text(raw.get("checkpoint_id"), max_chars=80) or None,
+        sync_job_id=sanitize_text(raw.get("sync_job_id"), max_chars=80) or None,
+    )
+
+
+def case_report_from_dict(raw: Mapping[str, Any]) -> GuideCaseReport:
+    return GuideCaseReport(
+        report_id=sanitize_text(raw.get("report_id"), max_chars=64),
+        plant_id=sanitize_text(raw.get("plant_id"), max_chars=64),
+        thread_id=sanitize_text(raw.get("thread_id"), max_chars=64),
+        created_at=sanitize_text(raw.get("created_at"), max_chars=64),
+        author_sync_id=sanitize_text(raw.get("author_sync_id"), max_chars=64),
+        title=sanitize_text(raw.get("title"), max_chars=160),
+        summary=sanitize_text(raw.get("summary"), max_chars=4000),
+        claim_focus=sanitize_text(raw.get("claim_focus"), max_chars=240),
+        privacy_class=normalize_privacy_class(raw.get("privacy_class")),
+        message_count=int(raw.get("message_count") or 0),
+        evidence_count=int(raw.get("evidence_count") or 0),
+        confidence=float(raw.get("confidence") or 0.0),
+        evidence_refs=[sanitize_text(item, max_chars=160) for item in list(raw.get("evidence_refs") or []) if sanitize_text(item, max_chars=160)],
+        metadata_cid=sanitize_text(raw.get("metadata_cid"), max_chars=160) or None,
+        checkpoint_id=sanitize_text(raw.get("checkpoint_id"), max_chars=80) or None,
+        sync_job_id=sanitize_text(raw.get("sync_job_id"), max_chars=80) or None,
+    )
+
+
+def trust_claim_from_dict(raw: Mapping[str, Any]) -> TrustClaim:
+    return TrustClaim(
+        claim_id=sanitize_text(raw.get("claim_id"), max_chars=64),
+        plant_id=sanitize_text(raw.get("plant_id"), max_chars=64),
+        report_id=sanitize_text(raw.get("report_id"), max_chars=64),
+        created_at=sanitize_text(raw.get("created_at"), max_chars=64),
+        author_sync_id=sanitize_text(raw.get("author_sync_id"), max_chars=64),
+        title=sanitize_text(raw.get("title"), max_chars=160),
+        claim_text=sanitize_text(raw.get("claim_text"), max_chars=3000),
+        claim_kind=sanitize_text(raw.get("claim_kind") or "diagnosis", max_chars=80),
+        confidence=float(raw.get("confidence") or 0.0),
+        status=sanitize_text(raw.get("status") or "evidence-backed", max_chars=80),
+        evidence_refs=[sanitize_text(item, max_chars=160) for item in list(raw.get("evidence_refs") or []) if sanitize_text(item, max_chars=160)],
+        review_count=int(raw.get("review_count") or 0),
+        accepts=int(raw.get("accepts") or 0),
+        challenges=int(raw.get("challenges") or 0),
+        metadata_cid=sanitize_text(raw.get("metadata_cid"), max_chars=160) or None,
+        checkpoint_id=sanitize_text(raw.get("checkpoint_id"), max_chars=80) or None,
+        sync_job_id=sanitize_text(raw.get("sync_job_id"), max_chars=80) or None,
+    )
+
+
+def claim_review_from_dict(raw: Mapping[str, Any]) -> ClaimReview:
+    return ClaimReview(
+        review_id=sanitize_text(raw.get("review_id"), max_chars=64),
+        claim_id=sanitize_text(raw.get("claim_id"), max_chars=64),
+        plant_id=sanitize_text(raw.get("plant_id"), max_chars=64),
+        created_at=sanitize_text(raw.get("created_at"), max_chars=64),
+        reviewer_sync_id=sanitize_text(raw.get("reviewer_sync_id"), max_chars=64),
+        reviewer_label=sanitize_text(raw.get("reviewer_label"), max_chars=160),
+        verdict=sanitize_text(raw.get("verdict") or "needs-evidence", max_chars=80),
+        rationale=sanitize_text(raw.get("rationale"), max_chars=3000),
+        evidence_note=sanitize_text(raw.get("evidence_note"), max_chars=1200),
+        uncertainty_delta=float(raw.get("uncertainty_delta") or 0.0),
         metadata_cid=sanitize_text(raw.get("metadata_cid"), max_chars=160) or None,
         checkpoint_id=sanitize_text(raw.get("checkpoint_id"), max_chars=80) or None,
         sync_job_id=sanitize_text(raw.get("sync_job_id"), max_chars=80) or None,
@@ -2544,13 +2667,85 @@ class GardenPromptStudio:
 
 class CanopyReputation:
     @staticmethod
-    def record(state: Dict[str, Any], observer_sync_id: str, privacy_class: str) -> None:
+    def _actor(state: Dict[str, Any], observer_sync_id: str) -> Dict[str, Any]:
         reputation = state.setdefault("reputation", {})
-        actor = reputation.setdefault(observer_sync_id, {"observations": 0, "public_anchors": 0, "score": 0})
+        actor = reputation.setdefault(
+            observer_sync_id,
+            {
+                "observations": 0,
+                "public_anchors": 0,
+                "case_reports": 0,
+                "reviews": 0,
+                "accepted_reviews": 0,
+                "challenged_reviews": 0,
+                "score": 0,
+            },
+        )
+        for key in ("observations", "public_anchors", "case_reports", "reviews", "accepted_reviews", "challenged_reviews", "score"):
+            actor[key] = int(actor.get(key) or 0)
+        return actor
+
+    @staticmethod
+    def _recalculate(actor: MutableMapping[str, Any]) -> None:
+        actor["score"] = min(
+            100,
+            int(actor.get("observations") or 0) * 5
+            + int(actor.get("public_anchors") or 0) * 10
+            + int(actor.get("case_reports") or 0) * 8
+            + int(actor.get("reviews") or 0) * 4
+            + int(actor.get("accepted_reviews") or 0) * 3
+            - int(actor.get("challenged_reviews") or 0) * 1,
+        )
+
+    @staticmethod
+    def record(state: Dict[str, Any], observer_sync_id: str, privacy_class: str) -> None:
+        actor = CanopyReputation._actor(state, observer_sync_id)
         actor["observations"] = int(actor.get("observations") or 0) + 1
         if privacy_class == "public":
             actor["public_anchors"] = int(actor.get("public_anchors") or 0) + 1
-        actor["score"] = min(100, actor["observations"] * 5 + actor["public_anchors"] * 10)
+        CanopyReputation._recalculate(actor)
+
+    @staticmethod
+    def record_case_report(state: Dict[str, Any], observer_sync_id: str, privacy_class: str) -> None:
+        actor = CanopyReputation._actor(state, observer_sync_id)
+        actor["case_reports"] = int(actor.get("case_reports") or 0) + 1
+        if privacy_class == "public":
+            actor["public_anchors"] = int(actor.get("public_anchors") or 0) + 1
+        CanopyReputation._recalculate(actor)
+
+    @staticmethod
+    def record_review(state: Dict[str, Any], reviewer_sync_id: str, verdict: str) -> None:
+        actor = CanopyReputation._actor(state, reviewer_sync_id)
+        actor["reviews"] = int(actor.get("reviews") or 0) + 1
+        clean_verdict = sanitize_text(verdict, max_chars=80).lower()
+        if clean_verdict in {"accept", "support"}:
+            actor["accepted_reviews"] = int(actor.get("accepted_reviews") or 0) + 1
+        if clean_verdict in {"challenge", "reject"}:
+            actor["challenged_reviews"] = int(actor.get("challenged_reviews") or 0) + 1
+        CanopyReputation._recalculate(actor)
+
+    @staticmethod
+    def leaderboard(state: Dict[str, Any]) -> List[Dict[str, Any]]:
+        reputation = state.setdefault("reputation", {})
+        rows: List[Dict[str, Any]] = []
+        for actor_id, raw in reputation.items():
+            if not isinstance(raw, dict):
+                continue
+            actor = dict(raw)
+            for key in ("observations", "public_anchors", "case_reports", "reviews", "accepted_reviews", "challenged_reviews", "score"):
+                actor[key] = int(actor.get(key) or 0)
+            actor["actor_id"] = sanitize_text(actor_id, max_chars=64)
+            rows.append(actor)
+        rows.sort(
+            key=lambda item: (
+                int(item.get("score") or 0),
+                int(item.get("case_reports") or 0),
+                int(item.get("reviews") or 0),
+                int(item.get("observations") or 0),
+            ),
+            reverse=True,
+        )
+        return rows
 
 
 class PhytoScanEdge:
@@ -3157,6 +3352,328 @@ class KaylasGardenRuntime:
         if health.disease_risk >= 0.45:
             items.append("Check for spreading lesions, mildew, or stem softening and improve airflow.")
         return list(dict.fromkeys(items))[:4]
+
+    def list_case_reports(self) -> List[GuideCaseReport]:
+        return [case_report_from_dict(item) for item in list(self.state.get("case_reports") or []) if isinstance(item, dict)]
+
+    def list_trust_claims(self) -> List[TrustClaim]:
+        return [trust_claim_from_dict(item) for item in list(self.state.get("trust_claims") or []) if isinstance(item, dict)]
+
+    def list_claim_reviews(self) -> List[ClaimReview]:
+        return [claim_review_from_dict(item) for item in list(self.state.get("claim_reviews") or []) if isinstance(item, dict)]
+
+    def _resolve_guide_thread(self, thread_ref: str, plant_id: str = "") -> Optional[Dict[str, Any]]:
+        clean_ref = sanitize_text(thread_ref, max_chars=160)
+        clean_plant = sanitize_text(plant_id, max_chars=64)
+        if not clean_ref:
+            return None
+        for thread in list(self.state.get("guide_threads") or []):
+            if not isinstance(thread, dict):
+                continue
+            if clean_plant and sanitize_text(thread.get("plant_id"), max_chars=64) != clean_plant:
+                continue
+            title = sanitize_text(thread.get("title"), max_chars=160)
+            if sanitize_text(thread.get("thread_id"), max_chars=64) == clean_ref or title.lower() == clean_ref.lower():
+                return thread
+        return None
+
+    def _collect_evidence_refs(self, passport: PlantPassport, *, limit: int = 4) -> List[str]:
+        refs: List[str] = []
+
+        def add_ref(value: Any) -> None:
+            ref = sanitize_text(value, max_chars=160)
+            if ref and ref not in refs:
+                refs.append(ref)
+
+        for observation in passport.observations[-limit:]:
+            add_ref(observation.metadata_cid)
+            for asset in observation.assets[-2:]:
+                add_ref(asset.cid)
+        for diagnosis in self._diagnoses_for_plant(passport.plant_id)[-limit:]:
+            add_ref(diagnosis.metadata_cid)
+        for checkin in self._health_checkins_for_plant(passport.plant_id)[-limit:]:
+            add_ref(checkin.metadata_cid)
+        for technique in self._shared_techniques_for_passport(passport)[-limit:]:
+            add_ref(technique.metadata_cid)
+        return refs
+
+    def _case_report_summary_text(self, passport: PlantPassport, thread: Mapping[str, Any], evidence_refs: List[str]) -> Tuple[str, str, float]:
+        messages = [item for item in list(thread.get("messages") or []) if isinstance(item, dict)]
+        latest_observation = passport.observations[-1] if passport.observations else None
+        assistant_tail = ""
+        for message in reversed(messages):
+            if sanitize_text(message.get("role"), max_chars=16) == "assistant":
+                assistant_tail = sanitize_text(message.get("content"), max_chars=700)
+                break
+        user_topics = [
+            sanitize_text(message.get("content"), max_chars=140)
+            for message in messages
+            if sanitize_text(message.get("role"), max_chars=16) == "user"
+        ]
+        title = sanitize_text(thread.get("title"), max_chars=160) or f"{passport.name} case report"
+        claim_focus = assistant_tail.splitlines()[0] if assistant_tail else (user_topics[-1] if user_topics else title)
+        confidence = latest_observation.health.confidence if latest_observation else 0.52
+        lines = [
+            f"Plant: {passport.name} ({passport.species or 'Unknown species'})",
+            f"Thread focus: {title}",
+            f"Current status: {latest_observation.health.status if latest_observation else 'no observation baseline yet'}",
+            f"Evidence linked: {len(evidence_refs)} object(s)",
+            "",
+            "Case summary",
+            sanitize_text(assistant_tail or "This thread is still forming. Promote it once you have at least one concrete diagnosis path, one uncertainty note, and one next inspection step.", max_chars=1600),
+        ]
+        if user_topics:
+            lines.extend(["", "Key questions asked"])
+            lines.extend(f"- {topic}" for topic in user_topics[-3:])
+        return "\n".join(lines), sanitize_text(claim_focus, max_chars=240), max(0.05, min(0.99, float(confidence)))
+
+    def promote_guide_thread_to_case_report(
+        self,
+        *,
+        plant_id: str,
+        thread_id: str,
+        privacy_class: str = "shared",
+        summary_note: str = "",
+    ) -> Dict[str, Any]:
+        passport = self.get_passport(plant_id)
+        thread = self._resolve_guide_thread(thread_id, plant_id=passport.plant_id)
+        if thread is None:
+            raise ValueError("Guide thread not found for this plant.")
+        messages = [item for item in list(thread.get("messages") or []) if isinstance(item, dict)]
+        if not messages:
+            raise ValueError("Guide thread has no messages to promote yet.")
+        evidence_refs = self._collect_evidence_refs(passport)
+        summary_text, claim_focus, confidence = self._case_report_summary_text(passport, thread, evidence_refs)
+        if sanitize_text(summary_note, max_chars=2000):
+            summary_text = f"{summary_text}\n\nOperator note\n{sanitize_text(summary_note, max_chars=2000)}"
+        report_payload = {
+            "report_id": f"report-{uuid.uuid4().hex}",
+            "plant_id": passport.plant_id,
+            "thread_id": sanitize_text(thread.get("thread_id"), max_chars=64),
+            "created_at": now_iso(),
+            "author_sync_id": self.identity.sync_id,
+            "title": sanitize_text(thread.get("title"), max_chars=160) or f"{passport.name} case report",
+            "summary": summary_text,
+            "claim_focus": claim_focus,
+            "privacy_class": normalize_privacy_class(privacy_class or passport.privacy_class),
+            "message_count": len(messages),
+            "evidence_count": len(evidence_refs),
+            "confidence": confidence,
+            "evidence_refs": evidence_refs,
+            "thread_excerpt": messages[-6:],
+        }
+        metadata_asset = self.leafvault.store_json(report_payload, filename=f"{passport.plant_id}-case-report")
+        checkpoint = self.ledger.create_checkpoint(passport.plant_id, metadata_asset.digest, metadata_asset.cid, passport.primary_geoproof)
+        self.ledger.queue(checkpoint)
+        sync_job = self.syncer.queue(passport.plant_id, [item for item in [metadata_asset.cid] + evidence_refs if item])
+        report = GuideCaseReport(
+            report_id=report_payload["report_id"],
+            plant_id=passport.plant_id,
+            thread_id=report_payload["thread_id"],
+            created_at=report_payload["created_at"],
+            author_sync_id=self.identity.sync_id,
+            title=report_payload["title"],
+            summary=report_payload["summary"],
+            claim_focus=report_payload["claim_focus"],
+            privacy_class=report_payload["privacy_class"],
+            message_count=report_payload["message_count"],
+            evidence_count=report_payload["evidence_count"],
+            confidence=report_payload["confidence"],
+            evidence_refs=evidence_refs,
+            metadata_cid=metadata_asset.cid,
+            checkpoint_id=checkpoint.checkpoint_id,
+            sync_job_id=sync_job.job_id,
+        )
+        self.state.setdefault("case_reports", []).append(asdict(report))
+        self.state.setdefault("anchor_queue", []).append(asdict(checkpoint))
+        self.state.setdefault("sync_queue", []).append(asdict(sync_job))
+        CanopyReputation.record_case_report(self.state, self.identity.sync_id, report.privacy_class)
+        self.save()
+        return {
+            "case_report": asdict(report),
+            "metadata_asset": asdict(metadata_asset),
+            "checkpoint": asdict(checkpoint),
+            "prepared_hive_operation": self.hive.prepare_checkpoint_operation(checkpoint),
+            "sync_job": asdict(sync_job),
+        }
+
+    def create_trust_claim(
+        self,
+        *,
+        plant_id: str,
+        title: str,
+        claim_text: str,
+        claim_kind: str = "diagnosis",
+        confidence: float = 0.65,
+        report_id: str = "",
+    ) -> Dict[str, Any]:
+        passport = self.get_passport(plant_id)
+        linked_report = None
+        if sanitize_text(report_id, max_chars=64):
+            for report in self.list_case_reports():
+                if report.report_id == sanitize_text(report_id, max_chars=64):
+                    linked_report = report
+                    break
+        evidence_refs = linked_report.evidence_refs[:] if linked_report else self._collect_evidence_refs(passport)
+        clean_confidence = max(0.05, min(0.99, float(confidence)))
+        payload = {
+            "claim_id": f"claim-{uuid.uuid4().hex}",
+            "plant_id": passport.plant_id,
+            "report_id": linked_report.report_id if linked_report else "",
+            "created_at": now_iso(),
+            "author_sync_id": self.identity.sync_id,
+            "title": sanitize_text(title, max_chars=160) or sanitize_text(claim_text.splitlines()[0], max_chars=160) or f"{passport.name} claim",
+            "claim_text": sanitize_text(claim_text, max_chars=3000),
+            "claim_kind": sanitize_text(claim_kind, max_chars=80) or "diagnosis",
+            "confidence": clean_confidence,
+            "status": "evidence-backed" if evidence_refs else "needs-evidence",
+            "evidence_refs": evidence_refs,
+            "review_count": 0,
+            "accepts": 0,
+            "challenges": 0,
+        }
+        metadata_asset = self.leafvault.store_json(payload, filename=f"{passport.plant_id}-trust-claim")
+        checkpoint = self.ledger.create_checkpoint(passport.plant_id, metadata_asset.digest, metadata_asset.cid, passport.primary_geoproof)
+        self.ledger.queue(checkpoint)
+        sync_job = self.syncer.queue(passport.plant_id, [item for item in [metadata_asset.cid] + evidence_refs if item])
+        claim = TrustClaim(
+            claim_id=payload["claim_id"],
+            plant_id=passport.plant_id,
+            report_id=payload["report_id"],
+            created_at=payload["created_at"],
+            author_sync_id=self.identity.sync_id,
+            title=payload["title"],
+            claim_text=payload["claim_text"],
+            claim_kind=payload["claim_kind"],
+            confidence=clean_confidence,
+            status=payload["status"],
+            evidence_refs=evidence_refs,
+            review_count=0,
+            accepts=0,
+            challenges=0,
+            metadata_cid=metadata_asset.cid,
+            checkpoint_id=checkpoint.checkpoint_id,
+            sync_job_id=sync_job.job_id,
+        )
+        self.state.setdefault("trust_claims", []).append(asdict(claim))
+        self.state.setdefault("anchor_queue", []).append(asdict(checkpoint))
+        self.state.setdefault("sync_queue", []).append(asdict(sync_job))
+        self.save()
+        return {
+            "trust_claim": asdict(claim),
+            "metadata_asset": asdict(metadata_asset),
+            "checkpoint": asdict(checkpoint),
+            "prepared_hive_operation": self.hive.prepare_checkpoint_operation(checkpoint),
+            "sync_job": asdict(sync_job),
+        }
+
+    def review_trust_claim(
+        self,
+        *,
+        claim_id: str,
+        verdict: str,
+        rationale: str,
+        evidence_note: str = "",
+        uncertainty_delta: float = 0.0,
+    ) -> Dict[str, Any]:
+        clean_claim_id = sanitize_text(claim_id, max_chars=64)
+        raw_claims = list(self.state.get("trust_claims") or [])
+        target_index = -1
+        claim = None
+        for index, raw in enumerate(raw_claims):
+            if not isinstance(raw, dict):
+                continue
+            current = trust_claim_from_dict(raw)
+            if current.claim_id == clean_claim_id:
+                target_index = index
+                claim = current
+                break
+        if claim is None or target_index < 0:
+            raise ValueError("Claim not found.")
+        clean_verdict = sanitize_text(verdict, max_chars=80).lower()
+        if clean_verdict not in {"accept", "challenge", "needs-evidence"}:
+            clean_verdict = "needs-evidence"
+        review_payload = {
+            "review_id": f"review-{uuid.uuid4().hex}",
+            "claim_id": claim.claim_id,
+            "plant_id": claim.plant_id,
+            "created_at": now_iso(),
+            "reviewer_sync_id": self.identity.sync_id,
+            "reviewer_label": self.identity.display_name,
+            "verdict": clean_verdict,
+            "rationale": sanitize_text(rationale, max_chars=3000),
+            "evidence_note": sanitize_text(evidence_note, max_chars=1200),
+            "uncertainty_delta": max(-1.0, min(1.0, float(uncertainty_delta))),
+            "evidence_refs": claim.evidence_refs,
+        }
+        metadata_asset = self.leafvault.store_json(review_payload, filename=f"{claim.plant_id}-claim-review")
+        checkpoint = self.ledger.create_checkpoint(claim.plant_id, metadata_asset.digest, metadata_asset.cid, None)
+        self.ledger.queue(checkpoint)
+        sync_job = self.syncer.queue(claim.plant_id, [item for item in [metadata_asset.cid] + claim.evidence_refs if item])
+        review = ClaimReview(
+            review_id=review_payload["review_id"],
+            claim_id=claim.claim_id,
+            plant_id=claim.plant_id,
+            created_at=review_payload["created_at"],
+            reviewer_sync_id=self.identity.sync_id,
+            reviewer_label=self.identity.display_name,
+            verdict=clean_verdict,
+            rationale=review_payload["rationale"],
+            evidence_note=review_payload["evidence_note"],
+            uncertainty_delta=review_payload["uncertainty_delta"],
+            metadata_cid=metadata_asset.cid,
+            checkpoint_id=checkpoint.checkpoint_id,
+            sync_job_id=sync_job.job_id,
+        )
+        claim.review_count += 1
+        if clean_verdict == "accept":
+            claim.accepts += 1
+        elif clean_verdict == "challenge":
+            claim.challenges += 1
+        if claim.challenges > claim.accepts:
+            claim.status = "challenged"
+        elif claim.accepts >= 2 and claim.accepts >= claim.challenges:
+            claim.status = "accepted"
+        elif clean_verdict == "needs-evidence":
+            claim.status = "needs-evidence"
+        else:
+            claim.status = "under-review"
+        raw_claims[target_index] = asdict(claim)
+        self.state["trust_claims"] = raw_claims
+        self.state.setdefault("claim_reviews", []).append(asdict(review))
+        self.state.setdefault("anchor_queue", []).append(asdict(checkpoint))
+        self.state.setdefault("sync_queue", []).append(asdict(sync_job))
+        CanopyReputation.record_review(self.state, self.identity.sync_id, clean_verdict)
+        self.save()
+        return {
+            "claim_review": asdict(review),
+            "trust_claim": asdict(claim),
+            "metadata_asset": asdict(metadata_asset),
+            "checkpoint": asdict(checkpoint),
+            "prepared_hive_operation": self.hive.prepare_checkpoint_operation(checkpoint),
+            "sync_job": asdict(sync_job),
+        }
+
+    def trust_lab_summary(self) -> Dict[str, Any]:
+        reports = self.list_case_reports()
+        claims = self.list_trust_claims()
+        reviews = self.list_claim_reviews()
+        pending_claims = [claim for claim in claims if claim.status in {"evidence-backed", "under-review", "needs-evidence", "challenged"}]
+        accepted_claims = [claim for claim in claims if claim.status == "accepted"]
+        leaderboard = CanopyReputation.leaderboard(self.state)
+        return {
+            "generated_at": now_iso(),
+            "guide_thread_count": len(list(self.state.get("guide_threads") or [])),
+            "case_report_count": len(reports),
+            "claim_count": len(claims),
+            "review_count": len(reviews),
+            "pending_claim_count": len(pending_claims),
+            "accepted_claim_count": len(accepted_claims),
+            "case_reports": [asdict(item) for item in reports[-12:]],
+            "claims": [asdict(item) for item in claims[-12:]],
+            "recent_reviews": [asdict(item) for item in reviews[-12:]],
+            "leaderboard": leaderboard[:8],
+        }
 
     def ipfs_daemon_status(self) -> Dict[str, Any]:
         return self.ipfs_daemon.status()
@@ -4075,13 +4592,20 @@ class KaylasGardenRuntime:
             ],
             "anchor_queue_depth": len(anchor_queue),
             "sync_queue_depth": len(sync_queue),
+            "observation_count": sum(len(plant.observations) for plant in plants),
             "diagnosis_count": len(list(self.state.get("diagnoses") or [])),
             "health_checkin_count": len(list(self.state.get("health_checkins") or [])),
             "shared_technique_count": len(list(self.state.get("shared_techniques") or [])),
+            "shared_techniques_count": len(list(self.state.get("shared_techniques") or [])),
+            "guide_thread_count": len(list(self.state.get("guide_threads") or [])),
+            "case_report_count": len(list(self.state.get("case_reports") or [])),
+            "trust_claim_count": len(list(self.state.get("trust_claims") or [])),
+            "claim_review_count": len(list(self.state.get("claim_reviews") or [])),
             "peer_user_count": len(list(self.state.get("peer_users") or [])),
             "pin_group_count": len(list(self.state.get("pin_groups") or [])),
             "top_watchlist": self.watchlist_report()["watchlist"][:3],
             "community_summary": self.community_summary(),
+            "trust_lab_summary": self.trust_lab_summary(),
             "model_status": self.model_manager.model_status(),
             "network_status": self.network_status(),
         }
@@ -4107,6 +4631,9 @@ if ctk is not None:
             self.lab_plant_var = tk.StringVar(value="")
             self.community_plant_var = tk.StringVar(value="")
             self.guide_thread_var = tk.StringVar(value="")
+            self.trust_case_plant_var = tk.StringVar(value="")
+            self.trust_case_thread_var = tk.StringVar(value="")
+            self.trust_claim_var = tk.StringVar(value="")
             self.network_mode_var = tk.StringVar(value="local-first")
             self.local_first_var = tk.StringVar(value="on")
             self.cloud_mode_var = tk.StringVar(value="off")
@@ -4439,7 +4966,7 @@ if ctk is not None:
 
         def _build_guide_tab(self, tab: Any) -> None:
             tab.grid_columnconfigure(0, weight=2)
-            tab.grid_columnconfigure(1, weight=4)
+            tab.grid_columnconfigure(1, weight=5)
             tab.grid_rowconfigure(0, weight=1)
 
             left = ctk.CTkFrame(tab)
@@ -4447,12 +4974,12 @@ if ctk is not None:
             left.grid_columnconfigure(0, weight=1)
             left.grid_rowconfigure(7, weight=1)
 
-            ctk.CTkLabel(left, text="Plant Health Chat", font=ctk.CTkFont(size=22, weight="bold")).grid(
+            ctk.CTkLabel(left, text="Chat With A Plant", font=ctk.CTkFont(size=22, weight="bold")).grid(
                 row=0, column=0, padx=18, pady=(18, 8), sticky="w"
             )
             ctk.CTkLabel(
                 left,
-                text="A longer-running, thread-based diagnostic surface. Keep separate threads for recovery, disease investigation, propagation, or public case-note drafting.",
+                text="Keep long-running threads for recovery, disease investigation, propagation, or public case-note drafting. The right side now behaves like a chat surface instead of a log dump.",
                 wraplength=360,
                 justify="left",
                 text_color="#B7D7B0",
@@ -4468,26 +4995,32 @@ if ctk is not None:
             self.guide_thread_picker.grid(row=0, column=0, padx=(0, 8), sticky="ew")
             ctk.CTkButton(thread_row, text="New Thread", width=110, command=self.on_new_guide_thread).grid(row=0, column=1, sticky="ew")
 
-            self.guide_thread_summary = self._make_textbox(left, height=150)
+            self.guide_thread_summary = self._make_textbox(left, height=170)
             self.guide_thread_summary.grid(row=4, column=0, padx=18, pady=(8, 10), sticky="ew")
 
-            ctk.CTkLabel(left, text="Prompt Composer", font=ctk.CTkFont(size=17, weight="bold")).grid(
+            ctk.CTkLabel(left, text="Context + Quick Prompts", font=ctk.CTkFont(size=17, weight="bold")).grid(
                 row=5, column=0, padx=18, pady=(0, 8), sticky="w"
             )
-            self.guide_question_box = self._make_textbox(left, height=180)
-            self.guide_question_box.grid(row=6, column=0, padx=18, pady=6, sticky="ew")
-            self.guide_question_box.insert(
-                "1.0",
-                "Tell me what changed since the last photos, what looks most likely right now, and what I should inspect next.",
-            )
+            suggestion_card = ctk.CTkFrame(left)
+            suggestion_card.grid(row=6, column=0, padx=18, pady=6, sticky="nsew")
+            suggestion_card.grid_columnconfigure(0, weight=1)
+            suggestion_card.grid_columnconfigure(1, weight=1)
+            self.guide_prompt_buttons: List[Any] = []
+            for idx in range(4):
+                button = ctk.CTkButton(
+                    suggestion_card,
+                    text=f"Prompt {idx + 1}",
+                    command=lambda index=idx: self.on_use_guide_suggestion(index),
+                    height=48,
+                )
+                button.grid(row=idx // 2, column=idx % 2, padx=8, pady=8, sticky="ew")
+                self.guide_prompt_buttons.append(button)
             controls = ctk.CTkFrame(left, fg_color="transparent")
             controls.grid(row=7, column=0, padx=18, pady=(8, 12), sticky="ew")
             controls.grid_columnconfigure(0, weight=1)
             controls.grid_columnconfigure(1, weight=1)
-            controls.grid_columnconfigure(2, weight=1)
             ctk.CTkButton(controls, text="Attach Context Image", command=self.on_pick_guide_image).grid(row=0, column=0, padx=(0, 8), sticky="ew")
-            ctk.CTkButton(controls, text="Send To Thread", command=self.on_chat_with_plant).grid(row=0, column=1, padx=8, sticky="ew")
-            ctk.CTkButton(controls, text="Create Draft Thread", command=self.on_new_guide_thread).grid(row=0, column=2, padx=(8, 0), sticky="ew")
+            ctk.CTkButton(controls, text="Promote Thread To Case Report", command=self.on_promote_case_report).grid(row=0, column=1, padx=(8, 0), sticky="ew")
             self.guide_image_path_label = ctk.CTkLabel(left, text="No current guide image selected", wraplength=360, justify="left")
             self.guide_image_path_label.grid(row=8, column=0, padx=18, pady=(0, 18), sticky="w")
 
@@ -4495,19 +5028,45 @@ if ctk is not None:
             right.grid(row=0, column=1, padx=(0, 18), pady=18, sticky="nsew")
             right.grid_columnconfigure(0, weight=1)
             right.grid_rowconfigure(1, weight=1)
-            right.grid_rowconfigure(3, weight=0)
-            right.grid_rowconfigure(5, weight=0)
+            right.grid_rowconfigure(2, weight=0)
 
             ctk.CTkLabel(right, text="Active Thread", font=ctk.CTkFont(size=20, weight="bold")).grid(
                 row=0, column=0, padx=18, pady=(18, 10), sticky="w"
             )
-            self.guide_result = self._make_textbox(right, height=430)
-            self.guide_result.grid(row=1, column=0, padx=18, pady=(0, 16), sticky="nsew")
-            ctk.CTkLabel(right, text="Suggested Next Prompts", font=ctk.CTkFont(size=18, weight="bold")).grid(
-                row=2, column=0, padx=18, pady=(0, 10), sticky="w"
+            self.guide_chat_meta = ctk.CTkLabel(
+                right,
+                text="Select a plant to start a chat thread.",
+                wraplength=720,
+                justify="left",
+                text_color="#B7D7B0",
             )
-            self.guide_suggestions = self._make_textbox(right, height=150)
-            self.guide_suggestions.grid(row=3, column=0, padx=18, pady=(0, 18), sticky="ew")
+            self.guide_chat_meta.grid(row=0, column=0, padx=(180, 18), pady=(18, 10), sticky="e")
+            self.guide_messages_frame = ctk.CTkScrollableFrame(right)
+            self.guide_messages_frame.grid(row=1, column=0, padx=18, pady=(0, 16), sticky="nsew")
+            self.guide_messages_frame.grid_columnconfigure(0, weight=1)
+            composer = ctk.CTkFrame(right)
+            composer.grid(row=2, column=0, padx=18, pady=(0, 18), sticky="ew")
+            composer.grid_columnconfigure(0, weight=1)
+            ctk.CTkLabel(composer, text="Message Composer", font=ctk.CTkFont(size=17, weight="bold")).grid(
+                row=0, column=0, padx=16, pady=(16, 8), sticky="w"
+            )
+            self.guide_question_box = self._make_textbox(composer, height=150)
+            self.guide_question_box.grid(row=1, column=0, padx=16, pady=(0, 8), sticky="ew")
+            self.guide_question_box.insert("1.0", "Tell me what changed since the last photos, what looks most likely right now, and what I should inspect next.")
+            ctk.CTkLabel(
+                composer,
+                text="Press Enter to send. Press Shift+Enter for a new line.",
+                text_color="#B7D7B0",
+            ).grid(row=2, column=0, padx=16, pady=(0, 10), sticky="w")
+            composer_buttons = ctk.CTkFrame(composer, fg_color="transparent")
+            composer_buttons.grid(row=3, column=0, padx=16, pady=(0, 16), sticky="ew")
+            composer_buttons.grid_columnconfigure(0, weight=1)
+            composer_buttons.grid_columnconfigure(1, weight=1)
+            composer_buttons.grid_columnconfigure(2, weight=1)
+            ctk.CTkButton(composer_buttons, text="New Thread", command=self.on_new_guide_thread).grid(row=0, column=0, padx=(0, 8), sticky="ew")
+            ctk.CTkButton(composer_buttons, text="Attach Image", command=self.on_pick_guide_image).grid(row=0, column=1, padx=8, sticky="ew")
+            ctk.CTkButton(composer_buttons, text="Send", command=self.on_chat_with_plant).grid(row=0, column=2, padx=(8, 0), sticky="ew")
+            self._apply_guide_text_bindings()
 
         def _build_network_surface_tab(self, tab: Any) -> None:
             tab.grid_columnconfigure(0, weight=3)
@@ -4665,33 +5224,101 @@ if ctk is not None:
             left.grid(row=0, column=0, padx=18, pady=18, sticky="nsew")
             left.grid_columnconfigure(0, weight=1)
             left.grid_rowconfigure(1, weight=1)
-            left.grid_rowconfigure(3, weight=1)
+            left.grid_rowconfigure(3, weight=0)
+            left.grid_rowconfigure(5, weight=1)
             ctk.CTkLabel(left, text="Trust Lab", font=ctk.CTkFont(size=22, weight="bold")).grid(
                 row=0, column=0, padx=18, pady=(18, 10), sticky="w"
             )
-            self.trust_lab_blueprint = self._make_textbox(left, height=260)
+            self.trust_lab_blueprint = self._make_textbox(left, height=180)
             self.trust_lab_blueprint.grid(row=1, column=0, padx=18, pady=(0, 16), sticky="nsew")
-            ctk.CTkLabel(left, text="Information Stake", font=ctk.CTkFont(size=18, weight="bold")).grid(
-                row=2, column=0, padx=18, pady=(0, 10), sticky="w"
+
+            promote = ctk.CTkFrame(left)
+            promote.grid(row=2, column=0, padx=18, pady=(0, 16), sticky="ew")
+            promote.grid_columnconfigure(0, weight=1)
+            ctk.CTkLabel(promote, text="Promote A Guide Thread", font=ctk.CTkFont(size=18, weight="bold")).grid(
+                row=0, column=0, padx=16, pady=(16, 8), sticky="w"
             )
-            self.trust_lab_stake = self._make_textbox(left, height=220)
-            self.trust_lab_stake.grid(row=3, column=0, padx=18, pady=(0, 18), sticky="nsew")
+            ctk.CTkLabel(
+                promote,
+                text="Turn a good chat thread into a signed case report that can anchor evidence, feed claims, and later travel to IPFS or Hive.",
+                wraplength=420,
+                justify="left",
+                text_color="#B7D7B0",
+            ).grid(row=1, column=0, padx=16, pady=(0, 8), sticky="w")
+            self.trust_case_plant_picker = ctk.CTkOptionMenu(promote, variable=self.trust_case_plant_var, values=["No plants yet"], command=lambda _=None: self._sync_trust_menus())
+            self.trust_case_plant_picker.grid(row=2, column=0, padx=16, pady=6, sticky="ew")
+            self.trust_case_thread_picker = ctk.CTkOptionMenu(promote, variable=self.trust_case_thread_var, values=["No threads yet"])
+            self.trust_case_thread_picker.grid(row=3, column=0, padx=16, pady=6, sticky="ew")
+            self.trust_case_privacy_menu = ctk.CTkOptionMenu(promote, values=["shared", "public", "private"])
+            self.trust_case_privacy_menu.grid(row=4, column=0, padx=16, pady=6, sticky="ew")
+            self.trust_case_note_box = self._make_textbox(promote, height=90)
+            self.trust_case_note_box.grid(row=5, column=0, padx=16, pady=6, sticky="ew")
+            self.trust_case_note_box.insert("1.0", "Optional operator note:\nWhy this thread is mature enough to promote and what uncertainty still remains.")
+            ctk.CTkButton(promote, text="Create Case Report", command=self.on_promote_case_report).grid(
+                row=6, column=0, padx=16, pady=(8, 16), sticky="ew"
+            )
+
+            ctk.CTkLabel(left, text="Information Stake", font=ctk.CTkFont(size=18, weight="bold")).grid(
+                row=4, column=0, padx=18, pady=(0, 10), sticky="w"
+            )
+            self.trust_lab_stake = self._make_textbox(left, height=180)
+            self.trust_lab_stake.grid(row=5, column=0, padx=18, pady=(0, 18), sticky="nsew")
 
             right = ctk.CTkFrame(tab)
             right.grid(row=0, column=1, padx=(0, 18), pady=18, sticky="nsew")
             right.grid_columnconfigure(0, weight=1)
             right.grid_rowconfigure(1, weight=1)
-            right.grid_rowconfigure(3, weight=1)
+            right.grid_rowconfigure(3, weight=0)
+            right.grid_rowconfigure(5, weight=1)
             ctk.CTkLabel(right, text="Claim Lifecycle", font=ctk.CTkFont(size=20, weight="bold")).grid(
                 row=0, column=0, padx=18, pady=(18, 10), sticky="w"
             )
-            self.trust_lab_claims = self._make_textbox(right, height=220)
+            self.trust_lab_claims = self._make_textbox(right, height=180)
             self.trust_lab_claims.grid(row=1, column=0, padx=18, pady=(0, 16), sticky="nsew")
-            ctk.CTkLabel(right, text="Auditors + Quantum Risk Sim", font=ctk.CTkFont(size=18, weight="bold")).grid(
-                row=2, column=0, padx=18, pady=(0, 10), sticky="w"
+
+            claim_card = ctk.CTkFrame(right)
+            claim_card.grid(row=2, column=0, padx=18, pady=(0, 16), sticky="ew")
+            claim_card.grid_columnconfigure(0, weight=1)
+            ctk.CTkLabel(claim_card, text="Claim Workbench", font=ctk.CTkFont(size=18, weight="bold")).grid(
+                row=0, column=0, padx=16, pady=(16, 8), sticky="w"
             )
-            self.trust_lab_auditors = self._make_textbox(right, height=220)
-            self.trust_lab_auditors.grid(row=3, column=0, padx=18, pady=(0, 18), sticky="nsew")
+            self.trust_claim_title_entry = ctk.CTkEntry(claim_card, placeholder_text="Claim title")
+            self.trust_claim_title_entry.grid(row=1, column=0, padx=16, pady=6, sticky="ew")
+            self.trust_claim_kind_menu = ctk.CTkOptionMenu(claim_card, values=["diagnosis", "care-plan", "site-proof", "species-id"])
+            self.trust_claim_kind_menu.grid(row=2, column=0, padx=16, pady=6, sticky="ew")
+            self.trust_claim_confidence_entry = ctk.CTkEntry(claim_card, placeholder_text="Confidence 0.0 - 1.0")
+            self.trust_claim_confidence_entry.grid(row=3, column=0, padx=16, pady=6, sticky="ew")
+            self.trust_claim_note_box = self._make_textbox(claim_card, height=90)
+            self.trust_claim_note_box.grid(row=4, column=0, padx=16, pady=6, sticky="ew")
+            self.trust_claim_note_box.insert("1.0", "Claim text:\nState the diagnosis or plant-health claim, what evidence supports it, and what could still overturn it.")
+            ctk.CTkButton(claim_card, text="Create Claim", command=self.on_create_trust_claim).grid(
+                row=5, column=0, padx=16, pady=(8, 16), sticky="ew"
+            )
+
+            review_card = ctk.CTkFrame(right)
+            review_card.grid(row=3, column=0, padx=18, pady=(0, 16), sticky="ew")
+            review_card.grid_columnconfigure(0, weight=1)
+            ctk.CTkLabel(review_card, text="Explainable Review", font=ctk.CTkFont(size=18, weight="bold")).grid(
+                row=0, column=0, padx=16, pady=(16, 8), sticky="w"
+            )
+            self.trust_review_claim_picker = ctk.CTkOptionMenu(review_card, variable=self.trust_claim_var, values=["No claims yet"])
+            self.trust_review_claim_picker.grid(row=1, column=0, padx=16, pady=6, sticky="ew")
+            self.trust_review_verdict_menu = ctk.CTkOptionMenu(review_card, values=["needs-evidence", "accept", "challenge"])
+            self.trust_review_verdict_menu.grid(row=2, column=0, padx=16, pady=6, sticky="ew")
+            self.trust_review_uncertainty_entry = ctk.CTkEntry(review_card, placeholder_text="Uncertainty delta, e.g. -0.2 or 0.15")
+            self.trust_review_uncertainty_entry.grid(row=3, column=0, padx=16, pady=6, sticky="ew")
+            self.trust_review_note_box = self._make_textbox(review_card, height=90)
+            self.trust_review_note_box.grid(row=4, column=0, padx=16, pady=6, sticky="ew")
+            self.trust_review_note_box.insert("1.0", "Review rationale:\nWhat evidence supports your verdict, what is missing, and what would change your mind.")
+            ctk.CTkButton(review_card, text="Submit Review", command=self.on_submit_trust_review).grid(
+                row=5, column=0, padx=16, pady=(8, 16), sticky="ew"
+            )
+
+            ctk.CTkLabel(right, text="Auditors + Quantum Risk Sim", font=ctk.CTkFont(size=18, weight="bold")).grid(
+                row=4, column=0, padx=18, pady=(0, 10), sticky="w"
+            )
+            self.trust_lab_auditors = self._make_textbox(right, height=180)
+            self.trust_lab_auditors.grid(row=5, column=0, padx=18, pady=(0, 18), sticky="nsew")
 
         def _build_community_tab(self, tab: Any) -> None:
             tab.grid_columnconfigure(0, weight=1)
@@ -4916,6 +5543,110 @@ if ctk is not None:
             widget.delete("1.0", "end")
             widget.insert("1.0", text)
 
+        def _apply_guide_text_bindings(self) -> None:
+            textbox = getattr(self.guide_question_box, "_textbox", None)
+            if textbox is None:
+                return
+            textbox.bind("<Return>", self._on_guide_text_return)
+            textbox.bind("<KP_Enter>", self._on_guide_text_return)
+            textbox.bind("<Shift-Return>", self._on_guide_text_shift_return)
+
+        def _on_guide_text_return(self, event: Any) -> str:
+            if int(getattr(event, "state", 0)) & 0x1:
+                event.widget.insert("insert", "\n")
+                return "break"
+            self.after(0, self.on_chat_with_plant)
+            return "break"
+
+        def _on_guide_text_shift_return(self, event: Any) -> str:
+            event.widget.insert("insert", "\n")
+            return "break"
+
+        def _guide_suggestion_items(self, thread: Optional[Mapping[str, Any]]) -> List[str]:
+            if not thread:
+                return [
+                    "Compare the newest leaves to the last observation.",
+                    "Build a 48-hour inspection plan.",
+                    "Which photos would reduce uncertainty most?",
+                    "Separate pest damage from nutrient stress.",
+                ]
+            plant_id = sanitize_text(str(thread.get("plant_id") or "this plant"), max_chars=60)
+            return [
+                f"For {plant_id}, rank the top three likely causes.",
+                "Turn this into a reversible 48-hour action plan.",
+                "Draft a public evidence note with uncertainty.",
+                "What would prove this diagnosis wrong fastest?",
+            ]
+
+        def _render_guide_messages(self, thread: Optional[Mapping[str, Any]]) -> None:
+            if not hasattr(self, "guide_messages_frame"):
+                return
+            for child in self.guide_messages_frame.winfo_children():
+                child.destroy()
+            if not thread:
+                card = ctk.CTkFrame(self.guide_messages_frame, corner_radius=18)
+                card.grid(row=0, column=0, padx=12, pady=12, sticky="ew")
+                card.grid_columnconfigure(0, weight=1)
+                ctk.CTkLabel(card, text="No active thread", font=ctk.CTkFont(size=18, weight="bold")).grid(
+                    row=0, column=0, padx=16, pady=(16, 8), sticky="w"
+                )
+                ctk.CTkLabel(
+                    card,
+                    text="Pick a plant, start a thread, then ask a question. The chat will keep plant history, image context, and prior care moves in one place.",
+                    wraplength=640,
+                    justify="left",
+                    text_color="#B7D7B0",
+                ).grid(row=1, column=0, padx=16, pady=(0, 16), sticky="w")
+                return
+            messages = [item for item in list(thread.get("messages") or []) if isinstance(item, dict)]
+            if not messages:
+                self._render_guide_messages(None)
+                return
+            for index, message in enumerate(messages[-18:]):
+                role = sanitize_text(message.get("role"), max_chars=16)
+                is_user = role == "user"
+                timestamp = sanitize_text(message.get("timestamp"), max_chars=32)
+                if "T" in timestamp:
+                    timestamp = timestamp.replace("T", " ")[:16]
+                outer = ctk.CTkFrame(self.guide_messages_frame, fg_color="transparent")
+                outer.grid(row=index, column=0, padx=12, pady=8, sticky="ew")
+                outer.grid_columnconfigure(0, weight=1)
+                outer.grid_columnconfigure(1, weight=1)
+                bubble = ctk.CTkFrame(
+                    outer,
+                    corner_radius=18,
+                    fg_color=("#DDEEDD", "#294535") if is_user else ("#F1F5EC", "#1F2D25"),
+                )
+                bubble.grid(row=0, column=1 if is_user else 0, padx=(140, 0) if is_user else (0, 140), sticky="ew")
+                bubble.grid_columnconfigure(0, weight=1)
+                ctk.CTkLabel(
+                    bubble,
+                    text=f"{'You' if is_user else 'Plant Guide'}{f' · {timestamp}' if timestamp else ''}",
+                    font=ctk.CTkFont(size=13, weight="bold"),
+                ).grid(row=0, column=0, padx=14, pady=(12, 6), sticky="w")
+                ctk.CTkLabel(
+                    bubble,
+                    text=sanitize_text(message.get("content"), max_chars=7000),
+                    wraplength=560,
+                    justify="left",
+                    anchor="w",
+                ).grid(row=1, column=0, padx=14, pady=(0, 10), sticky="w")
+                image_path = sanitize_text(message.get("image_path"), max_chars=280)
+                if image_path:
+                    ctk.CTkLabel(
+                        bubble,
+                        text=f"Image context: {image_path}",
+                        wraplength=520,
+                        justify="left",
+                        text_color="#B7D7B0",
+                    ).grid(row=2, column=0, padx=14, pady=(0, 12), sticky="w")
+            self.after(0, self._scroll_guide_to_bottom)
+
+        def _scroll_guide_to_bottom(self) -> None:
+            canvas = getattr(self.guide_messages_frame, "_parent_canvas", None)
+            if canvas is not None:
+                canvas.yview_moveto(1.0)
+
         def _selected_plant_id(self, variable: tk.StringVar) -> Optional[str]:
             label = sanitize_text(variable.get(), max_chars=200)
             return self.plant_lookup.get(label)
@@ -4993,8 +5724,22 @@ if ctk is not None:
                 self.guide_thread_var.set(labels[0])
             thread = self._active_guide_thread()
             self._set_text(self.guide_thread_summary, self._guide_thread_summary_text(thread))
-            self._set_text(self.guide_result, self._format_guide_transcript(thread))
-            self._set_text(self.guide_suggestions, self._guide_suggestions_text(thread))
+            plant_id = self._selected_plant_id(self.guide_plant_var) or "no-plant"
+            if hasattr(self, "guide_chat_meta"):
+                if thread:
+                    self.guide_chat_meta.configure(
+                        text=(
+                            f"Plant {plant_id} · {len(list(thread.get('messages') or []))} messages · "
+                            f"updated {sanitize_text(thread.get('updated_at'), max_chars=32) or 'n/a'}"
+                        )
+                    )
+                else:
+                    self.guide_chat_meta.configure(text="Select a plant and start a thread to open the chat surface.")
+            if hasattr(self, "guide_prompt_buttons"):
+                suggestions = self._guide_suggestion_items(thread)
+                for index, button in enumerate(self.guide_prompt_buttons):
+                    button.configure(text=suggestions[index] if index < len(suggestions) else "Prompt")
+            self._render_guide_messages(thread)
 
         def _create_guide_thread(self, plant_id: str, opening_question: str) -> Dict[str, Any]:
             now = datetime.now(UTC).isoformat()
@@ -5020,6 +5765,7 @@ if ctk is not None:
                 "role": role,
                 "content": sanitize_text(content, max_chars=7000),
                 "timestamp": datetime.now(UTC).isoformat(),
+                "image_path": sanitize_text(image_path, max_chars=320) if image_path else "",
             })
             thread["updated_at"] = datetime.now(UTC).isoformat()
             if image_path:
@@ -5052,19 +5798,46 @@ if ctk is not None:
             return "\n\n━━━━━━━━━━━━━━━━━━━━\n\n".join(feed)
 
         def _build_network_surface_design(self) -> str:
-            return (
-                "Innovation tracks\n\n"
-                "1. Source surfaces\n"
-                "- Split local evidence, shared IPFS packages, and Hive checkpoints into clearly labeled lanes.\n\n"
-                "2. Validation surfaces\n"
-                "- Let peers tag locations, attach proof links, and validate observations with structured review states instead of simple likes.\n\n"
-                "3. Information stake\n"
-                "- Weight trust by accepted contributions, correction accuracy, and audit quality rather than money alone.\n\n"
-                "4. Explainable voting\n"
-                "- Require each approval, dispute, or escalation to cite evidence and uncertainty.\n\n"
-                "5. Plant health publishing\n"
-                "- Promote high-quality chat threads into signed case reports that can later be anchored publicly."
-            )
+            trust = self.runtime.trust_lab_summary()
+            summary = self.runtime.summary()
+            lines = [
+                "Innovation tracks",
+                "",
+                "1. Source surfaces",
+                f"- Local observations: {summary.get('observation_count', 0)}",
+                f"- Shared techniques: {summary.get('shared_techniques_count', 0)}",
+                f"- Case reports: {trust.get('case_report_count', 0)}",
+                "",
+                "2. Validation surfaces",
+                f"- Trust claims: {trust.get('claim_count', 0)}",
+                f"- Pending claims: {trust.get('pending_claim_count', 0)}",
+                f"- Explainable reviews: {trust.get('review_count', 0)}",
+                "",
+                "3. Information stake",
+            ]
+            leaderboard = list(trust.get("leaderboard") or [])
+            if leaderboard:
+                for row in leaderboard[:3]:
+                    lines.append(f"- {row.get('actor_id')} score {row.get('score', 0)}")
+            else:
+                lines.append("- No reputation rows yet.")
+            lines.extend([
+                "",
+                "4. Explainable voting",
+            ])
+            reviews = list(trust.get("recent_reviews") or [])
+            if reviews:
+                for review in reviews[-3:]:
+                    lines.append(f"- {review.get('verdict') or 'needs-evidence'} on {review.get('claim_id') or 'claim'}")
+            else:
+                lines.append("- No explainable reviews yet.")
+            lines.extend([
+                "",
+                "5. Plant health publishing",
+                f"- Guide threads: {trust.get('guide_thread_count', 0)}",
+                f"- Promoted reports: {trust.get('case_report_count', 0)}",
+            ])
+            return "\n".join(lines)
 
         def _build_start_here_text(self, summary: Mapping[str, Any]) -> str:
             mode = summary["network_status"]["mode"]
@@ -5112,57 +5885,108 @@ if ctk is not None:
             )
 
         def _build_trust_lab_blueprint(self) -> str:
-            return (
-                "Source-origin account blueprint\n\n"
-                "Use one public project Hive account as the protocol origin, not as the user's personal identity.\n\n"
-                "Suggested linkage flow\n"
-                "1. Generate a local garden keypair.\n"
-                "2. Ask the user for a Hive handle.\n"
-                "3. Create a challenge string bound to the local public key and device fingerprint.\n"
-                "4. Publish or sign that challenge through Hive.\n"
-                "5. Record the verified link locally and later anchor the binding to IPFS/Hive.\n\n"
-                "That gives you a source-origin registry without collapsing every user into one shared account."
-            )
+            status = self.runtime.network_status()
+            trust = self.runtime.trust_lab_summary()
+            secret = self.runtime.network_secret_status()
+            lines = [
+                "Source-origin account blueprint",
+                "",
+                f"Hive enabled: {status.get('mode', {}).get('hive_enabled')}",
+                f"IPFS enabled: {status.get('mode', {}).get('ipfs_enabled')}",
+                f"Hive identity saved: {secret.get('hive_username_present') or secret.get('hive_username_set') or False}",
+                f"Guide threads ready for promotion: {trust.get('guide_thread_count', 0)}",
+                f"Case reports generated: {trust.get('case_report_count', 0)}",
+                "",
+                "Live protocol flow",
+                "1. Capture a plant observation or diagnosis locally.",
+                "2. Ask the guide until the thread has a stable hypothesis and next-step plan.",
+                "3. Promote the thread to a case report with evidence refs and uncertainty notes.",
+                "4. Turn the report into a trust claim when the statement is concrete enough to review.",
+                "5. Submit explainable reviews instead of bare votes so the garden preserves reasoning, not just outcomes.",
+            ]
+            return "\n".join(lines)
 
         def _build_information_stake_text(self) -> str:
-            return (
-                "Information stake idea\n\n"
-                "Trust weight should rise when someone contributes observations or audits that survive review and later evidence.\n\n"
-                "Possible signals\n"
-                "- accepted case reports\n"
-                "- correction accuracy\n"
-                "- low reversal rate\n"
-                "- diversity of reviewed domains\n"
-                "- citation quality\n"
-                "- how often the auditor reduced uncertainty instead of only echoing consensus\n\n"
-                "This is closer to proof-of-understanding than proof-of-money."
-            )
+            trust = self.runtime.trust_lab_summary()
+            leaderboard = list(trust.get("leaderboard") or [])
+            lines = [
+                "Information stake",
+                "",
+                "This score is now computed from real garden activity, not a placeholder note.",
+                "- observations add baseline credit",
+                "- public anchors add extra weight",
+                "- case reports add synthesis credit",
+                "- reviews add audit credit",
+                "",
+                "Leaderboard",
+            ]
+            if not leaderboard:
+                lines.append("No contributors scored yet. Record observations, publish case reports, or review claims to start the stake graph.")
+            else:
+                for row in leaderboard[:6]:
+                    lines.append(
+                        f"- {row.get('actor_id')} · score {row.get('score', 0)} · obs {row.get('observations', 0)} · reports {row.get('case_reports', 0)} · reviews {row.get('reviews', 0)}"
+                    )
+            return "\n".join(lines)
 
         def _build_claim_lifecycle_text(self) -> str:
-            return (
-                "Claim object lifecycle\n\n"
-                "draft → evidence-backed → challenged → reviewed → accepted / disputed / archived\n\n"
-                "Every transition should preserve:\n"
-                "- claim hash\n"
-                "- evidence links\n"
-                "- location scope\n"
-                "- uncertainty estimate\n"
-                "- who reviewed it\n"
-                "- why the state changed\n\n"
-                "For plant health, a claim could be: 'powdery mildew likely on west bed tomatoes, confidence 0.68, needs underside-leaf evidence.'"
-            )
+            trust = self.runtime.trust_lab_summary()
+            reports = list(trust.get("case_reports") or [])
+            claims = list(trust.get("claims") or [])
+            lines = [
+                "Claim object lifecycle",
+                "",
+                f"Guide threads: {trust.get('guide_thread_count', 0)}",
+                f"Case reports: {trust.get('case_report_count', 0)}",
+                f"Claims: {trust.get('claim_count', 0)}",
+                f"Reviews: {trust.get('review_count', 0)}",
+                "",
+            ]
+            if reports:
+                lines.append("Recent case reports")
+                for report in reports[-4:]:
+                    lines.append(
+                        f"- {report.get('title') or 'Untitled report'} · evidence {report.get('evidence_count', 0)} · confidence {report.get('confidence', 0.0):.2f}"
+                    )
+                lines.append("")
+            if claims:
+                lines.append("Recent claims")
+                for claim in claims[-5:]:
+                    lines.append(
+                        f"- {claim.get('title') or 'Untitled claim'} · {claim.get('status') or 'unknown'} · accepts {claim.get('accepts', 0)} · challenges {claim.get('challenges', 0)}"
+                    )
+            else:
+                lines.append("No trust claims yet. Promote a guide thread, then turn the report into a reviewable claim.")
+            return "\n".join(lines)
 
         def _build_auditor_text(self) -> str:
-            return (
-                "Auditor surface\n\n"
-                "Auditors should review evidence packs, not just vote. A strong review UI would ask them to:\n"
-                "- inspect image quality\n"
-                "- check whether the location tag is plausible\n"
-                "- compare against nearby linked observations\n"
-                "- run scenario prompts that stress the diagnosis\n"
-                "- explain what new evidence would flip the result\n\n"
-                "'Quantum risk simulation' can start as a deterministic what-if engine: generate competing explanations, estimate reversal risk, and surface the highest-value missing evidence."
-            )
+            trust = self.runtime.trust_lab_summary()
+            reviews = list(trust.get("recent_reviews") or [])
+            oqs_status = self.runtime.oqs_advisor.status()
+            lines = [
+                "Auditor surface",
+                "",
+                f"Recent explainable reviews: {len(reviews)}",
+                f"OQS advisory ready: {oqs_status.get('oqs_available') if isinstance(oqs_status, dict) else oqs_status}",
+                "",
+                "Recent review feed",
+            ]
+            if not reviews:
+                lines.append("No reviews yet. Submit an explainable review that cites evidence and uncertainty movement.")
+            else:
+                for review in reviews[-6:]:
+                    lines.append(
+                        f"- {review.get('verdict') or 'needs-evidence'} · claim {review.get('claim_id') or 'n/a'} · delta {review.get('uncertainty_delta', 0.0)}"
+                    )
+                    rationale = sanitize_text(review.get("rationale"), max_chars=160)
+                    if rationale:
+                        lines.append(f"  {rationale}")
+            lines.extend([
+                "",
+                "Quantum risk sim idea",
+                "Generate competing explanations, surface missing evidence with the highest uncertainty reduction, and preserve that reasoning next to every review.",
+            ])
+            return "\n".join(lines)
 
         def _build_dashboard_overview(self, summary: Mapping[str, Any]) -> str:
             plants = list(summary.get("plants") or [])
@@ -5214,9 +6038,9 @@ if ctk is not None:
                 lines.extend(["", "Plant roster"])
                 for plant in plants[:6]:
                     lines.append(
-                        f"- {plant.get('name', 'Unnamed')} · obs {plant.get('observation_count', 0)} · status {plant.get('latest_status', 'unknown')}"
+                        f"- {plant.get('name', 'Unnamed')} · obs {plant.get('observations', 0)} · status {plant.get('latest_status', 'unknown')}"
                     )
-            return "\\n".join(lines)
+            return "\n".join(lines)
 
         def _build_queue_overview(self) -> str:
             anchors = list(self.runtime.state.get("anchor_queue") or [])[-8:]
@@ -5233,7 +6057,7 @@ if ctk is not None:
                     "No queued network work right now.",
                     "Create an observation, publish a technique, or post a community action to generate outbound records.",
                 ])
-                return "\\n".join(lines)
+                return "\n".join(lines)
             if anchors:
                 lines.extend(["", "Recent anchor jobs"])
                 for item in anchors:
@@ -5247,14 +6071,14 @@ if ctk is not None:
                     lines.append(
                         f"- {sanitize_text(str(item.get('job_id') or 'job'), max_chars=18)} · {len(cids)} cid(s) · status {sanitize_text(str(item.get('status') or 'queued'), max_chars=24)}"
                     )
-            return "\\n".join(lines)
+            return "\n".join(lines)
 
         def _build_network_settings_status_text(self, status: Mapping[str, Any]) -> str:
             mode = status.get("mode") or {}
             leafvault = status.get("leafvault") or {}
             bloom = status.get("bloomtrace") or {}
             rootmesh = status.get("rootmesh") or {}
-            return "\\n".join([
+            return "\n".join([
                 "Publishing surface",
                 "",
                 f"Network mode: {mode.get('network_mode', 'unknown')}",
@@ -5276,7 +6100,7 @@ if ctk is not None:
             ])
 
         def _build_daemon_status_text(self, status: Mapping[str, Any]) -> str:
-            return "\\n".join([
+            return "\n".join([
                 "Managed IPFS daemon",
                 "",
                 f"Enabled in settings: {status.get('enabled')}",
@@ -5294,7 +6118,7 @@ if ctk is not None:
             ])
 
         def _build_secret_status_text(self, status: Mapping[str, Any]) -> str:
-            return "\\n".join([
+            return "\n".join([
                 "Encrypted network vault",
                 "",
                 f"Vault ready: {status.get('vault_ready') if 'vault_ready' in status else True}",
@@ -5341,7 +6165,7 @@ if ctk is not None:
                     lines.append(f"- {req.get('cid') or 'no-cid'} · {req.get('local_pin_status') or 'queued'}")
             if len(lines) == 6:
                 lines.extend(["", "No community objects yet.", "Add a peer, create a pin group, or post a comment to bootstrap the shared surface."])
-            return "\\n".join(lines)
+            return "\n".join(lines)
 
         def _build_insights_digest_text(self, digest: Mapping[str, Any]) -> str:
             watch = list(digest.get('top_watchlist') or [])
@@ -5364,12 +6188,12 @@ if ctk is not None:
                     lines.append(f"- {item.get('plant_name') or 'Unnamed'} · score {item.get('priority_score', 0)} · next {item.get('recommended_next_step') or 'Inspect soon'}")
             else:
                 lines.extend(["", "No watchlist pressure yet.", "Create plants and observations to generate risk-focused summaries."])
-            return "\\n".join(lines)
+            return "\n".join(lines)
 
         def _build_watchlist_text(self, report: Mapping[str, Any]) -> str:
             items = list(report.get('watchlist') or [])
             if not items:
-                return "Watchlist\\n\\nNo plants to rank yet. Add observations or check-ins so the system can prioritize attention."
+                return "Watchlist\n\nNo plants to rank yet. Add observations or check-ins so the system can prioritize attention."
             lines = ["Watchlist", ""]
             for item in items[:10]:
                 reasons = list(item.get('reasons') or [])
@@ -5380,12 +6204,12 @@ if ctk is not None:
                     for reason in reasons[:3]:
                         lines.append(f"  · {reason}")
                 lines.append("")
-            return "\\n".join(lines).rstrip()
+            return "\n".join(lines).rstrip()
 
         def _build_activity_text(self, activity: Mapping[str, Any]) -> str:
             items = list(activity.get('items') or [])
             if not items:
-                return "Activity timeline\\n\\nNo recorded events yet. Add a plant, an observation, or a care action to start the operational log."
+                return "Activity timeline\n\nNo recorded events yet. Add a plant, an observation, or a care action to start the operational log."
             lines = ["Activity timeline", ""]
             for item in items[:16]:
                 stamp = sanitize_text(str(item.get('timestamp') or ''), max_chars=32)
@@ -5396,13 +6220,13 @@ if ctk is not None:
                 if status_text or tags_text:
                     lines.append(f"- status: {status_text or 'n/a'} | tags: {tags_text or 'none'}")
                 lines.append("")
-            return "\\n".join(lines).rstrip()
+            return "\n".join(lines).rstrip()
 
         def _build_model_surface_text(self) -> str:
             model_status = self.runtime.model_manager.model_status()
             oqs_status = self.runtime.oqs_advisor.status()
             primary = model_status.get('primary_model') if isinstance(model_status, dict) else None
-            return "\\n".join([
+            return "\n".join([
                 "LiteRT-LM model surface",
                 "",
                 f"LiteRT installed: {model_status.get('litert_installed') if isinstance(model_status, dict) else False}",
@@ -5546,13 +6370,14 @@ if ctk is not None:
             self.guide_picker.configure(values=values)
             self.lab_picker.configure(values=values)
             self.community_post_plant_picker.configure(values=values)
-            self.guide_thread_var.set("")
             if values[0] == "No plants yet":
                 self.observe_plant_var.set(values[0])
                 self.care_plant_var.set(values[0])
                 self.guide_plant_var.set(values[0])
                 self.lab_plant_var.set(values[0])
                 self.community_plant_var.set(values[0])
+                if hasattr(self, "trust_case_plant_picker"):
+                    self.trust_case_plant_var.set(values[0])
             else:
                 if self.observe_plant_var.get() not in lookup:
                     self.observe_plant_var.set(values[0])
@@ -5564,6 +6389,56 @@ if ctk is not None:
                     self.lab_plant_var.set(values[0])
                 if self.community_plant_var.get() not in lookup:
                     self.community_plant_var.set(values[0])
+                if hasattr(self, "trust_case_plant_picker") and self.trust_case_plant_var.get() not in lookup:
+                    self.trust_case_plant_var.set(self.guide_plant_var.get() if self.guide_plant_var.get() in lookup else values[0])
+            self._sync_trust_menus()
+
+        def _sync_trust_menus(self) -> None:
+            if not hasattr(self, "trust_case_thread_picker"):
+                return
+            values = list(self.plant_lookup.keys()) or ["No plants yet"]
+            self.trust_case_plant_picker.configure(values=values)
+            if values[0] == "No plants yet":
+                self.trust_case_plant_var.set(values[0])
+                self.trust_thread_lookup = {}
+                self.trust_claim_lookup = {}
+                self.trust_case_thread_picker.configure(values=["No threads yet"])
+                self.trust_case_thread_var.set("No threads yet")
+                self.trust_review_claim_picker.configure(values=["No claims yet"])
+                self.trust_claim_var.set("No claims yet")
+                return
+            selected_plant_id = self._selected_plant_id(self.trust_case_plant_var) or self._selected_plant_id(self.guide_plant_var)
+            if not selected_plant_id:
+                self.trust_case_plant_var.set(values[0])
+                selected_plant_id = self._selected_plant_id(self.trust_case_plant_var)
+            threads = [
+                thread
+                for thread in list(self.runtime.state.get("guide_threads") or [])
+                if isinstance(thread, dict) and sanitize_text(thread.get("plant_id"), max_chars=64) == selected_plant_id
+            ]
+            thread_labels: List[str] = []
+            self.trust_thread_lookup = {}
+            for thread in sorted(threads, key=lambda item: str(item.get("updated_at") or ""), reverse=True):
+                label = self._guide_thread_label(thread)
+                thread_labels.append(label)
+                self.trust_thread_lookup[label] = sanitize_text(thread.get("thread_id"), max_chars=64)
+            if not thread_labels:
+                thread_labels = ["No threads yet"]
+            self.trust_case_thread_picker.configure(values=thread_labels)
+            if self.trust_case_thread_var.get() not in thread_labels:
+                self.trust_case_thread_var.set(thread_labels[0])
+
+            claim_labels: List[str] = []
+            self.trust_claim_lookup = {}
+            for claim in self.runtime.list_trust_claims():
+                label = f"{claim.title} · {claim.status}"
+                claim_labels.append(label)
+                self.trust_claim_lookup[label] = claim.claim_id
+            if not claim_labels:
+                claim_labels = ["No claims yet"]
+            self.trust_review_claim_picker.configure(values=claim_labels)
+            if self.trust_claim_var.get() not in claim_labels:
+                self.trust_claim_var.set(claim_labels[0])
 
         def _sync_settings_fields(self) -> None:
             settings = self.runtime.settings
@@ -5696,6 +6571,19 @@ if ctk is not None:
                 status="Generating care brief...",
             )
 
+        def on_use_guide_suggestion(self, index: int) -> None:
+            suggestions = self._guide_suggestion_items(self._active_guide_thread())
+            if index < 0 or index >= len(suggestions):
+                return
+            current = self.guide_question_box.get("1.0", "end").strip()
+            next_text = suggestions[index] if not current else f"{current}\n{suggestions[index]}"
+            self.guide_question_box.delete("1.0", "end")
+            self.guide_question_box.insert("1.0", next_text)
+            textbox = getattr(self.guide_question_box, "_textbox", None)
+            if textbox is not None:
+                textbox.focus_set()
+                textbox.mark_set("insert", "end-1c")
+
         def on_new_guide_thread(self) -> None:
             plant_id = self._selected_plant_id(self.guide_plant_var)
             if not plant_id:
@@ -5719,6 +6607,7 @@ if ctk is not None:
             thread = self._active_guide_thread() or self._create_guide_thread(plant_id, question)
             self.guide_thread_var.set(self._guide_thread_label(thread))
             self._append_guide_message(thread, "user", question, image_path=self.selected_guide_image_path)
+            self.guide_question_box.delete("1.0", "end")
             self._refresh_guide_threads_ui()
 
             def after_chat(result: Any) -> None:
@@ -5732,6 +6621,98 @@ if ctk is not None:
                 lambda: self.runtime.plant_guide_chat(plant_id, question=question, image_path=self.selected_guide_image_path),
                 after_chat,
                 status="Asking the long-context plant guide...",
+            )
+
+        def on_promote_case_report(self) -> None:
+            selected_thread_id = getattr(self, "trust_thread_lookup", {}).get(self.trust_case_thread_var.get())
+            plant_id = self._selected_plant_id(self.trust_case_plant_var) or self._selected_plant_id(self.guide_plant_var)
+            if not plant_id:
+                messagebox.showwarning("Kayla's Garden", "Choose a plant with at least one guide thread first.")
+                return
+            if not selected_thread_id:
+                active_thread = self._active_guide_thread()
+                selected_thread_id = sanitize_text(active_thread.get("thread_id"), max_chars=64) if active_thread else ""
+            if not selected_thread_id:
+                messagebox.showwarning("Kayla's Garden", "Choose a guide thread to promote first.")
+                return
+            note = sanitize_text(self.trust_case_note_box.get("1.0", "end"), max_chars=1800) if hasattr(self, "trust_case_note_box") else ""
+            if note.startswith("Optional operator note:"):
+                note = ""
+            self._run_worker(
+                lambda: self.runtime.promote_guide_thread_to_case_report(
+                    plant_id=plant_id,
+                    thread_id=selected_thread_id,
+                    privacy_class=self.trust_case_privacy_menu.get(),
+                    summary_note=note,
+                ),
+                self._after_trust_action,
+                status="Promoting guide thread to a signed case report...",
+            )
+
+        def on_create_trust_claim(self) -> None:
+            plant_id = self._selected_plant_id(self.trust_case_plant_var) or self._selected_plant_id(self.guide_plant_var)
+            if not plant_id:
+                messagebox.showwarning("Kayla's Garden", "Choose a plant first so the claim has a home.")
+                return
+            claim_text = sanitize_text(self.trust_claim_note_box.get("1.0", "end"), max_chars=2800)
+            if claim_text.startswith("Claim text:"):
+                claim_text = ""
+            if not claim_text:
+                messagebox.showwarning("Kayla's Garden", "Enter the claim text first.")
+                return
+            raw_confidence = sanitize_text(self.trust_claim_confidence_entry.get(), max_chars=16) or "0.65"
+            try:
+                confidence = float(raw_confidence)
+            except ValueError:
+                messagebox.showwarning("Kayla's Garden", "Confidence must be a number between 0.0 and 1.0.")
+                return
+            thread_id = getattr(self, "trust_thread_lookup", {}).get(self.trust_case_thread_var.get(), "")
+            linked_report = ""
+            if thread_id:
+                for report in self.runtime.list_case_reports():
+                    if report.thread_id == thread_id and report.plant_id == plant_id:
+                        linked_report = report.report_id
+                        break
+            self._run_worker(
+                lambda: self.runtime.create_trust_claim(
+                    plant_id=plant_id,
+                    title=sanitize_text(self.trust_claim_title_entry.get(), max_chars=160),
+                    claim_text=claim_text,
+                    claim_kind=self.trust_claim_kind_menu.get(),
+                    confidence=confidence,
+                    report_id=linked_report,
+                ),
+                self._after_trust_action,
+                status="Creating reviewable plant-health claim...",
+            )
+
+        def on_submit_trust_review(self) -> None:
+            claim_id = getattr(self, "trust_claim_lookup", {}).get(self.trust_claim_var.get(), "")
+            if not claim_id:
+                messagebox.showwarning("Kayla's Garden", "Choose a claim to review first.")
+                return
+            rationale = sanitize_text(self.trust_review_note_box.get("1.0", "end"), max_chars=2800)
+            if rationale.startswith("Review rationale:"):
+                rationale = ""
+            if not rationale:
+                messagebox.showwarning("Kayla's Garden", "Enter review rationale first.")
+                return
+            raw_delta = sanitize_text(self.trust_review_uncertainty_entry.get(), max_chars=16) or "0.0"
+            try:
+                uncertainty_delta = float(raw_delta)
+            except ValueError:
+                messagebox.showwarning("Kayla's Garden", "Uncertainty delta must be a number.")
+                return
+            self._run_worker(
+                lambda: self.runtime.review_trust_claim(
+                    claim_id=claim_id,
+                    verdict=self.trust_review_verdict_menu.get(),
+                    rationale=rationale,
+                    evidence_note=rationale,
+                    uncertainty_delta=uncertainty_delta,
+                ),
+                self._after_trust_action,
+                status="Submitting explainable review...",
             )
 
         def on_diagnose_problem(self) -> None:
@@ -5803,6 +6784,12 @@ if ctk is not None:
             self._set_text(self.care_lab_result, json.dumps(result, indent=2, ensure_ascii=True))
             self.refresh_all()
             self.status_var.set("Care lab action completed and queued for local-first sync.")
+
+        def _after_trust_action(self, result: Any) -> None:
+            self.refresh_all()
+            primary = result.get("case_report") or result.get("trust_claim") or result.get("claim_review") or result
+            self._set_text(self.trust_lab_claims, json.dumps(primary, indent=2, ensure_ascii=True))
+            self.status_var.set("Trust lab action completed and queued for local-first sync.")
 
         def on_install_ipfs_daemon(self) -> None:
             self.on_save_settings(show_dialog=False, refresh=False)
