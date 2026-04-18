@@ -4115,15 +4115,12 @@ if ctk is not None:
             self.ipfs_daemon_auto_start_var = tk.StringVar(value="off")
             self.hive_enabled_var = tk.StringVar(value="off")
             self.hive_broadcast_var = tk.StringVar(value="off")
-            self._placeholder_textboxes: list[Any] = []
-            self._muted_text_color = "#AAB3BA"
-            self._body_text_color = "#E8EEF2"
-            self._panel_color = "#3A3A3A"
-            self._panel_border_color = "#65707A"
+            self._body_text_color = "#ECECEC"
+            self._muted_text_color = "#A9B7A8"
 
             self.title("Kayla's Garden Studio")
-            self.geometry("1500x980")
-            self.minsize(1240, 840)
+            self.geometry("1420x940")
+            self.minsize(1180, 820)
             self.grid_columnconfigure(1, weight=1)
             self.grid_rowconfigure(0, weight=1)
 
@@ -4131,83 +4128,58 @@ if ctk is not None:
             self._build_tabs()
             self.refresh_all()
 
-        def _style_textbox(self, widget: Any) -> None:
-            textbox = getattr(widget, "_textbox", None)
-            if textbox is not None:
-                textbox.configure(
-                    wrap="word",
-                    padx=10,
-                    pady=10,
-                    spacing1=2,
-                    spacing3=2,
-                    insertbackground=self._body_text_color,
-                    relief="flat",
-                    borderwidth=0,
-                )
+        def _make_textbox(self, parent: Any, *, height: int = 220) -> Any:
+            box = ctk.CTkTextbox(parent, height=height, wrap="word")
             try:
-                widget.configure(
-                    fg_color=self._panel_color,
-                    border_width=1,
-                    border_color=self._panel_border_color,
-                    text_color=self._body_text_color,
-                    font=ctk.CTkFont(size=16),
-                    scrollbar_button_color="#5B646C",
-                    scrollbar_button_hover_color="#73808A",
-                )
+                box.configure(border_width=1, border_color="#56616B", corner_radius=10)
             except Exception:
                 pass
-
-        def _make_textbox(self, parent: Any, **kwargs: Any) -> Any:
-            widget = ctk.CTkTextbox(parent, **kwargs)
-            self._style_textbox(widget)
-            return widget
-
-        def _seed_textbox(self, widget: Any, placeholder: str) -> None:
-            self._style_textbox(widget)
-            widget.delete("1.0", "end")
-            widget.insert("1.0", placeholder)
             try:
-                widget.configure(text_color=self._muted_text_color)
+                box._textbox.configure(wrap="word", padx=12, pady=10, insertbackground="#F1F5F1")
             except Exception:
                 pass
+            return box
 
-            def handle_focus_in(_event: Any, box: Any = widget, seed: str = placeholder) -> None:
-                current = box.get("1.0", "end-1c")
-                if current == seed:
-                    box.delete("1.0", "end")
-                    try:
-                        box.configure(text_color=self._body_text_color)
-                    except Exception:
-                        pass
+        def _make_section_intro(self, parent: Any, title: str, body: str, *, row: int = 0, column: int = 0, padx: Any = 18, pady: Any = (18, 10), wraplength: int = 760) -> None:
+            ctk.CTkLabel(parent, text=title, font=ctk.CTkFont(size=24, weight="bold")).grid(
+                row=row, column=column, padx=padx, pady=(pady[0], 4), sticky="w"
+            )
+            ctk.CTkLabel(
+                parent,
+                text=body,
+                wraplength=wraplength,
+                justify="left",
+                text_color=self._muted_text_color,
+            ).grid(row=row + 1, column=column, padx=padx, pady=(0, pady[1]), sticky="w")
 
-            def handle_focus_out(_event: Any, box: Any = widget, seed: str = placeholder) -> None:
-                current = box.get("1.0", "end-1c").strip()
-                if not current:
-                    box.delete("1.0", "end")
-                    box.insert("1.0", seed)
-                    try:
-                        box.configure(text_color=self._muted_text_color)
-                    except Exception:
-                        pass
+        def _make_hint(self, parent: Any, text: str, *, row: int, column: int = 0, padx: Any = 18, pady: Any = (0, 10), wraplength: int = 500) -> None:
+            ctk.CTkLabel(
+                parent,
+                text=text,
+                wraplength=wraplength,
+                justify="left",
+                text_color=self._muted_text_color,
+            ).grid(row=row, column=column, padx=padx, pady=pady, sticky="w")
 
-            widget.bind("<FocusIn>", handle_focus_in, add="+")
-            widget.bind("<FocusOut>", handle_focus_out, add="+")
-            self._placeholder_textboxes.append(widget)
-
-        def _textbox_value(self, widget: Any) -> str:
-            value = widget.get("1.0", "end-1c")
-            if widget in getattr(self, "_placeholder_textboxes", []):
-                text_color = None
-                try:
-                    text_color = widget.cget("text_color")
-                except Exception:
-                    text_color = None
-                if text_color == self._muted_text_color:
-                    return ""
-            return value.strip()
+        def _make_info_card(self, parent: Any, title: str, body: str, *, row: int, column: int, padx: Any = 18, pady: Any = 18, height: int = 220) -> Any:
+            card = ctk.CTkFrame(parent)
+            card.grid(row=row, column=column, padx=padx, pady=pady, sticky="nsew")
+            card.grid_columnconfigure(0, weight=1)
+            card.grid_rowconfigure(1, weight=1)
+            ctk.CTkLabel(card, text=title, font=ctk.CTkFont(size=20, weight="bold")).grid(
+                row=0, column=0, padx=18, pady=(18, 10), sticky="w"
+            )
+            box = self._make_textbox(card, height=height)
+            box.grid(row=1, column=0, padx=18, pady=(0, 18), sticky="nsew")
+            self._set_text(box, body.strip())
+            try:
+                box.configure(state="disabled")
+            except Exception:
+                pass
+            return box
 
         def _build_sidebar(self) -> None:
-            sidebar = ctk.CTkFrame(self, width=300, corner_radius=0)
+            sidebar = ctk.CTkFrame(self, width=305, corner_radius=0)
             sidebar.grid(row=0, column=0, sticky="nsew")
             sidebar.grid_rowconfigure(99, weight=1)
 
@@ -4218,27 +4190,28 @@ if ctk is not None:
             ).grid(row=0, column=0, padx=20, pady=(24, 6), sticky="w")
             ctk.CTkLabel(
                 sidebar,
-                text="Local-first plant tagging, secure storage, IPFS, and Hive checkpoints.",
-                wraplength=250,
+                text="Local-first plant tagging, secure storage, IPFS, Hive checkpoints, and evidence-aware trust flows.",
+                wraplength=255,
                 justify="left",
                 text_color="#B7D7B0",
             ).grid(row=1, column=0, padx=20, pady=(0, 18), sticky="w")
 
-            self.identity_label = ctk.CTkLabel(sidebar, text="", wraplength=250, justify="left")
+            self.identity_label = ctk.CTkLabel(sidebar, text="", wraplength=255, justify="left")
             self.identity_label.grid(row=2, column=0, padx=20, pady=(0, 16), sticky="w")
 
             ctk.CTkButton(sidebar, text="Refresh", command=self.refresh_all).grid(row=3, column=0, padx=20, pady=6, sticky="ew")
             ctk.CTkButton(sidebar, text="Bootstrap Repo Data", command=self.on_bootstrap).grid(row=4, column=0, padx=20, pady=6, sticky="ew")
             ctk.CTkButton(sidebar, text="Verify LiteRT Model", command=self.on_verify_model).grid(row=5, column=0, padx=20, pady=6, sticky="ew")
             ctk.CTkButton(sidebar, text="Download LiteRT Model", command=self.on_download_model).grid(row=6, column=0, padx=20, pady=6, sticky="ew")
+            ctk.CTkButton(sidebar, text="Run System Check", command=self.refresh_all).grid(row=7, column=0, padx=20, pady=6, sticky="ew")
 
-            self.sidebar_metrics = self._make_textbox(sidebar, height=190)
-            self.sidebar_metrics.grid(row=7, column=0, padx=20, pady=(16, 10), sticky="nsew")
+            self.sidebar_metrics = self._make_textbox(sidebar, height=200)
+            self.sidebar_metrics.grid(row=8, column=0, padx=20, pady=(16, 10), sticky="nsew")
 
             ctk.CTkLabel(
                 sidebar,
                 textvariable=self.status_var,
-                wraplength=250,
+                wraplength=255,
                 justify="left",
                 text_color="#D6E8CF",
             ).grid(row=100, column=0, padx=20, pady=(12, 24), sticky="sw")
@@ -4258,16 +4231,25 @@ if ctk is not None:
                 )
             except Exception:
                 pass
-            self.tabs.add("Dashboard")
-            self.tabs.add("Plants")
-            self.tabs.add("Observe")
-            self.tabs.add("Guide")
-            self.tabs.add("Care Lab")
-            self.tabs.add("Community")
-            self.tabs.add("Insights")
-            self.tabs.add("Settings")
-            self.tabs.add("Models")
+            for tab_name in [
+                "Start Here",
+                "System Check",
+                "Dashboard",
+                "Plants",
+                "Observe",
+                "Guide",
+                "Care Lab",
+                "Community",
+                "Insights",
+                "Settings",
+                "Models",
+                "Trust Lab",
+                "About",
+            ]:
+                self.tabs.add(tab_name)
 
+            self._build_start_tab(self.tabs.tab("Start Here"))
+            self._build_system_check_tab(self.tabs.tab("System Check"))
             self._build_dashboard_tab(self.tabs.tab("Dashboard"))
             self._build_plants_tab(self.tabs.tab("Plants"))
             self._build_observe_tab(self.tabs.tab("Observe"))
@@ -4277,20 +4259,391 @@ if ctk is not None:
             self._build_insights_tab(self.tabs.tab("Insights"))
             self._build_network_tab(self.tabs.tab("Settings"))
             self._build_models_tab(self.tabs.tab("Models"))
+            self._build_trust_tab(self.tabs.tab("Trust Lab"))
+            self._build_about_tab(self.tabs.tab("About"))
+            self.tabs.set("Start Here")
+
+        def _build_start_tab(self, tab: Any) -> None:
+            tab.grid_columnconfigure(0, weight=2)
+            tab.grid_columnconfigure(1, weight=3)
+            tab.grid_rowconfigure(2, weight=1)
+
+            self._make_section_intro(
+                tab,
+                "First Start Flow",
+                "Use this screen as the day-one checklist for local setup, Hive linking, and trust-safe publishing.",
+                row=0,
+                column=0,
+                padx=18,
+                pady=(18, 12),
+                wraplength=900,
+            )
+
+            left = ctk.CTkFrame(tab)
+            left.grid(row=2, column=0, padx=18, pady=(0, 18), sticky="nsew")
+            left.grid_columnconfigure(0, weight=1)
+            left.grid_rowconfigure(1, weight=1)
+            ctk.CTkLabel(left, text="Setup Flow", font=ctk.CTkFont(size=20, weight="bold")).grid(
+                row=0, column=0, padx=18, pady=(18, 10), sticky="w"
+            )
+            self.start_guide_text = self._make_textbox(left, height=520)
+            self.start_guide_text.grid(row=1, column=0, padx=18, pady=(0, 18), sticky="nsew")
+            self._set_text(self.start_guide_text, self._generate_start_flow_text())
+            try:
+                self.start_guide_text.configure(state="disabled")
+            except Exception:
+                pass
+
+            right = ctk.CTkFrame(tab)
+            right.grid(row=2, column=1, padx=(0, 18), pady=(0, 18), sticky="nsew")
+            right.grid_columnconfigure(0, weight=1)
+            right.grid_rowconfigure(1, weight=1)
+            right.grid_rowconfigure(3, weight=1)
+
+            ctk.CTkLabel(right, text="Hive Linking Notes", font=ctk.CTkFont(size=20, weight="bold")).grid(
+                row=0, column=0, padx=18, pady=(18, 10), sticky="w"
+            )
+            self.start_hive_text = self._make_textbox(right, height=240)
+            self.start_hive_text.grid(row=1, column=0, padx=18, pady=(0, 18), sticky="nsew")
+            self._set_text(self.start_hive_text, self._generate_hive_notes_text())
+            try:
+                self.start_hive_text.configure(state="disabled")
+            except Exception:
+                pass
+
+            ctk.CTkLabel(right, text="Recommended Next Build", font=ctk.CTkFont(size=20, weight="bold")).grid(
+                row=2, column=0, padx=18, pady=(0, 10), sticky="w"
+            )
+            self.start_next_steps_text = self._make_textbox(right, height=220)
+            self.start_next_steps_text.grid(row=3, column=0, padx=18, pady=(0, 18), sticky="nsew")
+            self._set_text(self.start_next_steps_text, self._generate_next_steps_text())
+            try:
+                self.start_next_steps_text.configure(state="disabled")
+            except Exception:
+                pass
+
+        def _build_system_check_tab(self, tab: Any) -> None:
+            tab.grid_columnconfigure(0, weight=3)
+            tab.grid_columnconfigure(1, weight=2)
+            tab.grid_rowconfigure(2, weight=1)
+
+            self._make_section_intro(
+                tab,
+                "Readiness + Safety Check",
+                "This screen condenses the runtime into a practical go/no-go report before you publish, sync, or link external identities.",
+                row=0,
+                column=0,
+                padx=18,
+                pady=(18, 12),
+                wraplength=900,
+            )
+            ctk.CTkButton(tab, text="Refresh Checks", command=self.refresh_all).grid(row=1, column=0, padx=18, pady=(0, 12), sticky="w")
+
+            self.system_check_text = self._make_textbox(tab, height=540)
+            self.system_check_text.grid(row=2, column=0, padx=18, pady=(0, 18), sticky="nsew")
+
+            side = ctk.CTkFrame(tab)
+            side.grid(row=2, column=1, padx=(0, 18), pady=(0, 18), sticky="nsew")
+            side.grid_columnconfigure(0, weight=1)
+            side.grid_rowconfigure(1, weight=1)
+            side.grid_rowconfigure(3, weight=1)
+            ctk.CTkLabel(side, text="Concept Status", font=ctk.CTkFont(size=20, weight="bold")).grid(row=0, column=0, padx=18, pady=(18, 10), sticky="w")
+            self.system_concept_text = self._make_textbox(side, height=220)
+            self.system_concept_text.grid(row=1, column=0, padx=18, pady=(0, 18), sticky="nsew")
+            ctk.CTkLabel(side, text="Audit Surface", font=ctk.CTkFont(size=20, weight="bold")).grid(row=2, column=0, padx=18, pady=(0, 10), sticky="w")
+            self.system_audit_text = self._make_textbox(side, height=220)
+            self.system_audit_text.grid(row=3, column=0, padx=18, pady=(0, 18), sticky="nsew")
+            self._set_text(self.system_audit_text, self._generate_audit_surface_text())
+            try:
+                self.system_audit_text.configure(state="disabled")
+            except Exception:
+                pass
+
+        def _build_trust_tab(self, tab: Any) -> None:
+            tab.grid_columnconfigure(0, weight=1)
+            tab.grid_columnconfigure(1, weight=1)
+            tab.grid_rowconfigure(1, weight=1)
+            tab.grid_rowconfigure(2, weight=1)
+
+            self._make_section_intro(
+                tab,
+                "Trust Lab",
+                "Design the community layer around evidence, reversibility, and auditor performance rather than pure economic weight.",
+                row=0,
+                column=0,
+                padx=18,
+                pady=(18, 12),
+                wraplength=980,
+            )
+
+            self.trust_identity_text = self._make_info_card(tab, "Source Origin + Linking", self._generate_linking_flow_text(), row=1, column=0, padx=18, pady=(0, 18), height=280)
+            self.trust_stake_text = self._make_info_card(tab, "Information Stake", self._generate_information_stake_text(), row=1, column=1, padx=(0, 18), pady=(0, 18), height=280)
+            self.trust_governance_text = self._make_info_card(tab, "Governance + Voting Surface", self._generate_governance_surface_text(), row=2, column=0, padx=18, pady=(0, 18), height=280)
+            self.trust_roadmap_text = self._make_info_card(tab, "Roadmap", self._generate_trust_roadmap_text(), row=2, column=1, padx=(0, 18), pady=(0, 18), height=280)
+
+        def _build_about_tab(self, tab: Any) -> None:
+            tab.grid_columnconfigure(0, weight=1)
+            tab.grid_columnconfigure(1, weight=1)
+            tab.grid_rowconfigure(1, weight=1)
+            tab.grid_rowconfigure(2, weight=1)
+
+            self._make_section_intro(
+                tab,
+                "About Kayla's Garden",
+                "A local-first garden intelligence studio with optional IPFS distribution, Hive anchoring, and evidence-based trust experiments.",
+                row=0,
+                column=0,
+                padx=18,
+                pady=(18, 12),
+                wraplength=960,
+            )
+            self._make_info_card(tab, "Architecture", self._generate_architecture_text(), row=1, column=0, padx=18, pady=(0, 18), height=260)
+            self._make_info_card(tab, "Principles", self._generate_principles_text(), row=1, column=1, padx=(0, 18), pady=(0, 18), height=260)
+            self._make_info_card(tab, "Safer Validation Model", self._generate_validation_model_text(), row=2, column=0, padx=18, pady=(0, 18), height=260)
+            self._make_info_card(tab, "Next Concept Steps", self._generate_next_steps_text(), row=2, column=1, padx=(0, 18), pady=(0, 18), height=260)
+
+        def _generate_start_flow_text(self) -> str:
+            return """
+1. Refresh the runtime and inspect identity health.
+- Confirm SyncID, fingerprint, and device label are visible.
+- Keep network mode local-first until the local loop feels stable.
+
+2. Configure garden settings.
+- Add a location only if you want location-aware summaries.
+- Set IPFS and Hive values only when you actually intend to bridge outward.
+
+3. Prepare storage and model surfaces.
+- Verify the LiteRT model before relying on guide or diagnosis workflows.
+- Use managed IPFS only after checking where the repo path and binary path point.
+
+4. Create your first plant passport and first observation.
+- Start private.
+- Publish a note and image to LeafVault.
+- Review the resulting JSON before wider sharing.
+
+5. Link Hive intentionally.
+- Use a personal account, not a repo secret.
+- Prove account ownership with a signed challenge or on-chain memo.
+- Store credentials only in the encrypted vault.
+
+6. Expand into trust workflows.
+- Add peers.
+- Create small private groups.
+- Test attestation, correction, and audit flows before public voting.
+""".strip()
+
+        def _generate_hive_notes_text(self) -> str:
+            return """
+Hive account setup:
+- Create or recover the account outside the app.
+- Use the account name as the public identity label.
+- Store only the needed posting key in the encrypted vault.
+
+Recommended linking proof:
+- App generates a challenge tied to the local garden public key.
+- User signs or publishes that challenge from Hive.
+- App verifies chain data and binds Hive account ↔ garden key ↔ device fingerprint.
+
+Safer default:
+- Keep a public source-origin account for schemas, announcements, and compatibility notices.
+- Never ship a private origin account key in the repo.
+""".strip()
+
+        def _generate_next_steps_text(self) -> str:
+            return """
+Near-term build targets:
+- guided settings tooltips across every network field
+- visual queue health chips for anchor and sync backlog
+- claim object schema for species/location/link attestations
+- trust ledger for accepted corrections, disputes, and reversals
+- auditor review queue with evidence bundles and risk flags
+- signed export bundle for cross-device restore and verification
+""".strip()
+
+        def _generate_linking_flow_text(self) -> str:
+            return """
+Source-origin account pattern:
+- repo publishes schemas, manifests, trusted checkpoints, and compatibility notes
+- user accounts remain separate and must self-link
+
+Linking flow:
+- generate local identity keypair
+- hash the garden public key into a challenge
+- publish or sign challenge from Hive
+- verify chain proof
+- record reversible linkage with timestamp and revision history
+""".strip()
+
+        def _generate_information_stake_text(self) -> str:
+            return """
+Information stake can score people by useful verified work instead of money.
+
+Possible inputs:
+- accepted observations
+- correction accuracy
+- audit quality
+- reversal rate
+- validator diversity
+- evidence completeness
+- long-term consistency
+
+That makes influence earned from reliable contributions, not only economic weight.
+""".strip()
+
+        def _generate_governance_surface_text(self) -> str:
+            return """
+A stronger voting surface could let peers validate:
+- species claims
+- location tags
+- source links
+- care technique cards
+- fraud or anomaly flags
+
+Suggested rules:
+- votes attach to evidence bundles, not empty opinions
+- higher-risk claims require broader review
+- disputed claims stay visible with state markers
+- auditors are scored by later outcomes, not title alone
+""".strip()
+
+        def _generate_trust_roadmap_text(self) -> str:
+            return """
+Roadmap ideas:
+1. signed claim objects
+2. evidence bundle viewer
+3. reversible attest / dispute workflow
+4. auditor queue with structured reasons
+5. risk simulation scoring
+6. trust graph explorer
+7. source-origin schema registry
+8. public accountability timeline
+""".strip()
+
+        def _generate_architecture_text(self) -> str:
+            return """
+Core architecture:
+- local vault holds the working truth
+- LeafVault stores garden records and revisions
+- IPFS distributes evidence blobs and snapshots
+- Hive anchors compact public summaries and attestation traces
+- the UI remains the coordination layer for review and repair
+""".strip()
+
+        def _generate_principles_text(self) -> str:
+            return """
+Design principles:
+- local-first before network-first
+- evidence before influence
+- reversible claims over silent mutation
+- human-auditable history
+- gradual exposure from private to shared to public
+- separate source identity from user identity
+""".strip()
+
+        def _generate_validation_model_text(self) -> str:
+            return """
+Safer validation model:
+- every claim carries author, time, target, and evidence refs
+- peers can attest, extend, dispute, or supersede
+- reputation rises from accepted high-quality work
+- auditor weight changes with downstream accuracy
+- anomaly and consistency scoring highlights risky claims for review
+""".strip()
+
+        def _generate_audit_surface_text(self) -> str:
+            return """
+Audit surface ideas:
+- show risk buckets for identity, model, IPFS, Hive, and queue backlog
+- mark claims missing evidence, signatures, or reviewer diversity
+- keep a reversal timeline so bad approvals lower trust
+- let auditors attach structured reasons instead of freeform only
+""".strip()
+
+        def _generate_system_check_text(self, summary: Dict[str, Any]) -> str:
+            mode = summary["network_status"]["mode"]
+            daemon = summary["network_status"]["ipfs_daemon"]
+            model = summary["model_status"]
+            issues = []
+            if not self.runtime.identity.sync_id:
+                issues.append("Identity not initialized")
+            if not model.get("installed"):
+                issues.append("Primary LiteRT model missing")
+            if mode.get("cloud_mode") and not summary["network_status"]["ipfs"].get("httpx_available"):
+                issues.append("Cloud mode requested but HTTP transport is not ready")
+            if summary["sync_queue_depth"] > 25:
+                issues.append("Sync queue is growing")
+            if summary["anchor_queue_depth"] > 25:
+                issues.append("Anchor queue is growing")
+            issue_lines = "\n".join(f"- {item}" for item in issues) if issues else "- No immediate blockers detected"
+            return f"""
+Identity
+- SyncID: {self.runtime.identity.sync_id}
+- Fingerprint: {self.runtime.identity.fingerprint}
+- Device: {self.runtime.identity.device_label}
+
+Runtime posture
+- Network mode: {mode.get('network_mode')}
+- Local-first only: {mode.get('local_first_only')}
+- Cloud mode: {mode.get('cloud_mode')}
+- IPFS enabled: {mode.get('ipfs_enabled')}
+- Hive enabled: {mode.get('hive_enabled')}
+
+Model + transport
+- LiteRT installed: {model.get('litert_installed')}
+- Model present: {model.get('installed')}
+- Crypto available: {model.get('crypto_available')}
+- HTTPX available: {model.get('httpx_available')}
+- OQS available: {model.get('oqs_available')}
+
+Daemon
+- Managed IPFS binary exists: {daemon.get('binary_exists')}
+- Repo initialized: {daemon.get('repo_initialized')}
+- Running: {daemon.get('running')}
+
+Queues
+- Anchor queue depth: {summary['anchor_queue_depth']}
+- Sync queue depth: {summary['sync_queue_depth']}
+- Plant count: {len(summary['plants'])}
+- Diagnosis count: {summary['diagnosis_count']}
+- Health check-ins: {summary['health_checkin_count']}
+
+Attention
+{issue_lines}
+""".strip()
+
+        def _generate_concept_status_text(self, summary: Dict[str, Any]) -> str:
+            community = summary.get('community_summary') or {}
+            return f"""
+Concept maturity snapshot
+- Plants tracked: {len(summary['plants'])}
+- Peer users: {community.get('peer_count', 0)}
+- Pin groups: {community.get('group_count', 0)}
+- Shared techniques: {summary.get('shared_technique_count', 0)}
+
+What is ready now
+- local-first records
+- observations and plant passports
+- optional IPFS and Hive settings
+- community surfaces for early experiments
+
+What should evolve next
+- evidence-native trust ledger
+- claim review states
+- account linking proofs
+- auditor performance metrics
+""".strip()
 
         def _build_dashboard_tab(self, tab: Any) -> None:
             tab.grid_columnconfigure(0, weight=3)
             tab.grid_columnconfigure(1, weight=2)
-            tab.grid_rowconfigure(1, weight=1)
+            tab.grid_rowconfigure(2, weight=1)
 
-            ctk.CTkLabel(tab, text="Garden Overview", font=ctk.CTkFont(size=24, weight="bold")).grid(
-                row=0, column=0, padx=18, pady=(18, 8), sticky="w"
-            )
+            self._make_section_intro(tab, "Garden Overview", "A high-level runtime summary of identity, records, network posture, and model readiness.", row=0, column=0, padx=18, pady=(18, 10), wraplength=820)
             self.dashboard_summary = self._make_textbox(tab)
-            self.dashboard_summary.grid(row=1, column=0, padx=18, pady=(0, 18), sticky="nsew")
+            self.dashboard_summary.grid(row=2, column=0, padx=18, pady=(0, 18), sticky="nsew")
 
             right = ctk.CTkFrame(tab)
-            right.grid(row=1, column=1, padx=(0, 18), pady=(0, 18), sticky="nsew")
+            right.grid(row=2, column=1, padx=(0, 18), pady=(0, 18), sticky="nsew")
             right.grid_rowconfigure(1, weight=1)
             right.grid_columnconfigure(0, weight=1)
 
@@ -4321,7 +4674,7 @@ if ctk is not None:
             self.plant_zone_entry.grid(row=3, column=0, padx=18, pady=6, sticky="ew")
             self.plant_notes_box = self._make_textbox(form, height=140)
             self.plant_notes_box.grid(row=4, column=0, padx=18, pady=6, sticky="ew")
-            self._seed_textbox(self.plant_notes_box, "Plant notes, bed details, or care context")
+            self.plant_notes_box.insert("1.0", "Plant notes, bed details, or care context")
             self.plant_privacy_menu = ctk.CTkOptionMenu(form, values=["private", "shared", "public"])
             self.plant_privacy_menu.grid(row=5, column=0, padx=18, pady=6, sticky="ew")
             ctk.CTkButton(form, text="Add Plant Passport", command=self.on_add_plant).grid(
@@ -4332,7 +4685,7 @@ if ctk is not None:
             right.grid(row=0, column=1, rowspan=2, padx=(0, 18), pady=18, sticky="nsew")
             right.grid_columnconfigure(0, weight=1)
             right.grid_rowconfigure(1, weight=1)
-            right.grid_rowconfigure(5, weight=1)
+            right.grid_rowconfigure(4, weight=1)
 
             ctk.CTkLabel(right, text="Plant Passports", font=ctk.CTkFont(size=20, weight="bold")).grid(
                 row=0, column=0, padx=18, pady=(18, 10), sticky="w"
@@ -4374,7 +4727,7 @@ if ctk is not None:
             self.observe_privacy_menu.grid(row=5, column=0, padx=18, pady=6, sticky="ew")
             self.observe_note_box = self._make_textbox(form, height=220)
             self.observe_note_box.grid(row=6, column=0, padx=18, pady=6, sticky="ew")
-            self._seed_textbox(self.observe_note_box, "Describe what you see in the plant image or in person.")
+            self.observe_note_box.insert("1.0", "Describe what you see in the plant image or in person.")
             ctk.CTkButton(form, text="Choose Plant Image", command=self.on_pick_image).grid(
                 row=7, column=0, padx=18, pady=(8, 6), sticky="ew"
             )
@@ -4409,10 +4762,10 @@ if ctk is not None:
             )
             self.guide_picker = ctk.CTkOptionMenu(left, variable=self.guide_plant_var, values=["No plants yet"])
             self.guide_picker.grid(row=1, column=0, padx=18, pady=6, sticky="ew")
-            self.guide_question_box = self._make_textbox(left, height=260)
+            self.guide_question_box = ctk.CTkTextbox(left, height=260)
             self.guide_question_box.grid(row=2, column=0, padx=18, pady=6, sticky="ew")
-            self._seed_textbox(
-                self.guide_question_box,
+            self.guide_question_box.insert(
+                "1.0",
                 "Tell me what changed since the last photos, what looks most likely right now, and what I should inspect next.",
             )
             ctk.CTkButton(left, text="Choose Current Context Image", command=self.on_pick_guide_image).grid(
@@ -4450,9 +4803,9 @@ if ctk is not None:
             self.lab_picker.grid(row=1, column=0, padx=18, pady=6, sticky="ew")
             self.lab_tags_entry = ctk.CTkEntry(left, placeholder_text="Lab tags, comma separated")
             self.lab_tags_entry.grid(row=2, column=0, padx=18, pady=6, sticky="ew")
-            self.diagnosis_note_box = self._make_textbox(left, height=180)
+            self.diagnosis_note_box = ctk.CTkTextbox(left, height=180)
             self.diagnosis_note_box.grid(row=3, column=0, padx=18, pady=6, sticky="ew")
-            self._seed_textbox(self.diagnosis_note_box, "Describe the plant problem, visible symptoms, spread pattern, and what changed.")
+            self.diagnosis_note_box.insert("1.0", "Describe the plant problem, visible symptoms, spread pattern, and what changed.")
             ctk.CTkButton(left, text="Choose Diagnosis Image", command=self.on_pick_lab_image).grid(
                 row=4, column=0, padx=18, pady=(8, 6), sticky="ew"
             )
@@ -4463,7 +4816,7 @@ if ctk is not None:
             )
             self.checkin_note_box = self._make_textbox(left, height=140)
             self.checkin_note_box.grid(row=7, column=0, padx=18, pady=6, sticky="ew")
-            self._seed_textbox(self.checkin_note_box, "Short health check-in note: growth, moisture, pests, recovery, stress, flowering, etc.")
+            self.checkin_note_box.insert("1.0", "Short health check-in note: growth, moisture, pests, recovery, stress, flowering, etc.")
             ctk.CTkButton(left, text="Save Health Check-In", command=self.on_record_health_checkin).grid(
                 row=8, column=0, padx=18, pady=(8, 18), sticky="ew"
             )
@@ -4484,16 +4837,16 @@ if ctk is not None:
             self.technique_tags_entry.grid(row=3, column=0, padx=18, pady=6, sticky="ew")
             self.technique_privacy_menu = ctk.CTkOptionMenu(right, values=["private", "shared", "public"])
             self.technique_privacy_menu.grid(row=4, column=0, padx=18, pady=6, sticky="ew")
-            self.technique_summary_box = self._make_textbox(right, height=120)
+            self.technique_summary_box = ctk.CTkTextbox(right, height=120)
             self.technique_summary_box.grid(row=5, column=0, padx=18, pady=6, sticky="ew")
-            self._seed_textbox(self.technique_summary_box, "Describe the technique, when it helped, and any caveats.")
+            self.technique_summary_box.insert("1.0", "Describe the technique, when it helped, and any caveats.")
             self.technique_steps_box = self._make_textbox(right, height=120)
             self.technique_steps_box.grid(row=6, column=0, padx=18, pady=6, sticky="ew")
-            self._seed_textbox(self.technique_steps_box, "One step per line")
+            self.technique_steps_box.insert("1.0", "One step per line")
             ctk.CTkButton(right, text="Publish Shared Technique", command=self.on_publish_technique).grid(
                 row=7, column=0, padx=18, pady=(8, 10), sticky="new"
             )
-            self.care_lab_result = self._make_textbox(right)
+            self.care_lab_result = ctk.CTkTextbox(right)
             self.care_lab_result.grid(row=8, column=0, padx=18, pady=(0, 18), sticky="nsew")
 
         def _build_insights_tab(self, tab: Any) -> None:
@@ -4509,7 +4862,7 @@ if ctk is not None:
             ctk.CTkLabel(left, text="Garden Digest", font=ctk.CTkFont(size=20, weight="bold")).grid(
                 row=0, column=0, padx=18, pady=(18, 10), sticky="w"
             )
-            self.insights_digest = self._make_textbox(left, height=220)
+            self.insights_digest = ctk.CTkTextbox(left, height=220)
             self.insights_digest.grid(row=1, column=0, padx=18, pady=(0, 16), sticky="nsew")
             ctk.CTkLabel(left, text="Watchlist", font=ctk.CTkFont(size=18, weight="bold")).grid(
                 row=2, column=0, padx=18, pady=(0, 10), sticky="w"
@@ -4551,9 +4904,9 @@ if ctk is not None:
             self.peer_ipfs_user_id_entry.grid(row=3, column=0, padx=18, pady=6, sticky="ew")
             self.peer_pin_group_entry = ctk.CTkEntry(left, placeholder_text="Preferred pin group")
             self.peer_pin_group_entry.grid(row=4, column=0, padx=18, pady=6, sticky="ew")
-            self.peer_notes_box = self._make_textbox(left, height=90)
+            self.peer_notes_box = ctk.CTkTextbox(left, height=90)
             self.peer_notes_box.grid(row=5, column=0, padx=18, pady=6, sticky="ew")
-            self._seed_textbox(self.peer_notes_box, "Notes about what this plant user likes to pin or comment on.")
+            self.peer_notes_box.insert("1.0", "Notes about what this plant user likes to pin or comment on.")
             ctk.CTkButton(left, text="Add Active Plant User", command=self.on_add_peer_user).grid(
                 row=6, column=0, padx=18, pady=(8, 18), sticky="ew"
             )
@@ -4570,7 +4923,7 @@ if ctk is not None:
             self.community_group_name_entry.grid(row=1, column=0, padx=18, pady=6, sticky="ew")
             self.community_group_description_box = self._make_textbox(right, height=90)
             self.community_group_description_box.grid(row=2, column=0, padx=18, pady=6, sticky="ew")
-            self._seed_textbox(self.community_group_description_box, "Describe the group purpose, plant types, or pin behavior.")
+            self.community_group_description_box.insert("1.0", "Describe the group purpose, plant types, or pin behavior.")
             self.community_group_privacy_menu = ctk.CTkOptionMenu(right, values=["private", "shared", "public"])
             self.community_group_privacy_menu.grid(row=3, column=0, padx=18, pady=6, sticky="ew")
             ctk.CTkButton(right, text="Create Pin Group", command=self.on_create_pin_group).grid(
@@ -4580,9 +4933,9 @@ if ctk is not None:
             self.community_post_plant_picker.grid(row=5, column=0, padx=18, pady=6, sticky="ew")
             self.community_target_cids_entry = ctk.CTkEntry(right, placeholder_text="Target CIDs, comma separated")
             self.community_target_cids_entry.grid(row=6, column=0, padx=18, pady=6, sticky="ew")
-            self.community_comment_box = self._make_textbox(right, height=100)
+            self.community_comment_box = ctk.CTkTextbox(right, height=100)
             self.community_comment_box.grid(row=7, column=0, padx=18, pady=6, sticky="ew")
-            self._seed_textbox(self.community_comment_box, "Comment under this plant user group and point peers at useful plant content.")
+            self.community_comment_box.insert("1.0", "Comment under this plant user group and point peers at useful plant content.")
             ctk.CTkButton(right, text="Post Group Comment", command=self.on_post_pin_group_comment).grid(
                 row=8, column=0, padx=18, pady=(8, 12), sticky="ew"
             )
@@ -4590,13 +4943,13 @@ if ctk is not None:
             self.community_pin_request_cid_entry.grid(row=9, column=0, padx=18, pady=6, sticky="ew")
             self.community_pin_request_peers_entry = ctk.CTkEntry(right, placeholder_text="Target peer ids, comma separated")
             self.community_pin_request_peers_entry.grid(row=10, column=0, padx=18, pady=6, sticky="ew")
-            self.community_pin_request_note_box = self._make_textbox(right, height=80)
+            self.community_pin_request_note_box = ctk.CTkTextbox(right, height=80)
             self.community_pin_request_note_box.grid(row=11, column=0, padx=18, pady=6, sticky="ew")
-            self._seed_textbox(self.community_pin_request_note_box, "Why should peers pin this content for faster access?")
+            self.community_pin_request_note_box.insert("1.0", "Why should peers pin this content for faster access?")
             ctk.CTkButton(right, text="Queue Peer Pin Request", command=self.on_request_peer_pin).grid(
                 row=12, column=0, padx=18, pady=(8, 10), sticky="ew"
             )
-            self.community_result = self._make_textbox(right, height=220)
+            self.community_result = ctk.CTkTextbox(right, height=220)
             self.community_result.grid(row=13, column=0, padx=18, pady=(0, 18), sticky="nsew")
 
         def _build_network_tab(self, tab: Any) -> None:
@@ -4696,17 +5049,17 @@ if ctk is not None:
             ctk.CTkLabel(queue_frame, text="Managed IPFS Status", font=ctk.CTkFont(size=20, weight="bold")).grid(
                 row=0, column=0, padx=18, pady=(18, 10), sticky="w"
             )
-            self.daemon_status_text = self._make_textbox(queue_frame, height=220)
+            self.daemon_status_text = ctk.CTkTextbox(queue_frame, height=220)
             self.daemon_status_text.grid(row=1, column=0, padx=18, pady=(0, 16), sticky="nsew")
             ctk.CTkLabel(queue_frame, text="Encrypted Credential Status", font=ctk.CTkFont(size=18, weight="bold")).grid(
                 row=2, column=0, padx=18, pady=(0, 10), sticky="w"
             )
-            self.secret_status_text = self._make_textbox(queue_frame, height=180)
+            self.secret_status_text = ctk.CTkTextbox(queue_frame, height=180)
             self.secret_status_text.grid(row=3, column=0, padx=18, pady=(0, 16), sticky="nsew")
             ctk.CTkLabel(queue_frame, text="Queue + Publishing State", font=ctk.CTkFont(size=18, weight="bold")).grid(
                 row=4, column=0, padx=18, pady=(0, 10), sticky="w"
             )
-            self.network_queue = self._make_textbox(queue_frame)
+            self.network_queue = ctk.CTkTextbox(queue_frame)
             self.network_queue.grid(row=5, column=0, padx=18, pady=(0, 18), sticky="nsew")
 
         def _build_models_tab(self, tab: Any) -> None:
@@ -4729,12 +5082,10 @@ if ctk is not None:
             self.models_text.grid(row=1, column=0, padx=18, pady=(0, 18), sticky="nsew")
 
         def _set_text(self, widget: Any, text: str) -> None:
-            self._style_textbox(widget)
+            textbox = getattr(widget, "_textbox", None)
+            if textbox is not None:
+                textbox.configure(wrap="word")
             widget.delete("1.0", "end")
-            try:
-                widget.configure(text_color=self._body_text_color)
-            except Exception:
-                pass
             widget.insert("1.0", text)
 
         def _selected_plant_id(self, variable: tk.StringVar) -> Optional[str]:
@@ -4806,6 +5157,10 @@ if ctk is not None:
                     ensure_ascii=True,
                 ),
             )
+            if hasattr(self, "system_check_text"):
+                self._set_text(self.system_check_text, self._generate_system_check_text(summary))
+            if hasattr(self, "system_concept_text"):
+                self._set_text(self.system_concept_text, self._generate_concept_status_text(summary))
             self._sync_settings_fields()
             self._sync_plant_menus()
             self.status_var.set("Garden runtime refreshed.")
@@ -4921,7 +5276,7 @@ if ctk is not None:
                         name=name,
                         species=species or name,
                         hardiness_zone=sanitize_text(self.plant_zone_entry.get(), max_chars=64),
-                        notes=sanitize_text(self._textbox_value(self.plant_notes_box), max_chars=2000),
+                        notes=sanitize_text(self.plant_notes_box.get("1.0", "end"), max_chars=2000),
                         privacy_class=self.plant_privacy_menu.get(),
                     )
                 )
@@ -4958,7 +5313,7 @@ if ctk is not None:
             if not plant_id:
                 messagebox.showwarning("Kayla's Garden", "Create or choose a plant first.")
                 return
-            note = sanitize_text(self._textbox_value(self.observe_note_box), max_chars=1200)
+            note = sanitize_text(self.observe_note_box.get("1.0", "end"), max_chars=1200)
             if not note:
                 messagebox.showwarning("Kayla's Garden", "Enter an observation note first.")
                 return
@@ -5005,7 +5360,7 @@ if ctk is not None:
             if not plant_id:
                 messagebox.showwarning("Kayla's Garden", "Choose a plant passport first.")
                 return
-            question = sanitize_text(self._textbox_value(self.guide_question_box), max_chars=1400)
+            question = sanitize_text(self.guide_question_box.get("1.0", "end"), max_chars=1400)
             if not question:
                 messagebox.showwarning("Kayla's Garden", "Enter a plant question first.")
                 return
@@ -5020,7 +5375,7 @@ if ctk is not None:
             if not plant_id:
                 messagebox.showwarning("Kayla's Garden", "Choose a plant passport first.")
                 return
-            symptom_note = sanitize_text(self._textbox_value(self.diagnosis_note_box), max_chars=1400)
+            symptom_note = sanitize_text(self.diagnosis_note_box.get("1.0", "end"), max_chars=1400)
             if not symptom_note:
                 messagebox.showwarning("Kayla's Garden", "Describe the plant problem first.")
                 return
@@ -5041,7 +5396,7 @@ if ctk is not None:
             if not plant_id:
                 messagebox.showwarning("Kayla's Garden", "Choose a plant passport first.")
                 return
-            note = sanitize_text(self._textbox_value(self.checkin_note_box), max_chars=1200)
+            note = sanitize_text(self.checkin_note_box.get("1.0", "end"), max_chars=1200)
             tags = [item.strip() for item in self.lab_tags_entry.get().split(",") if item.strip()]
             self._run_worker(
                 lambda: self.runtime.record_health_checkin(
@@ -5060,11 +5415,11 @@ if ctk is not None:
                 messagebox.showwarning("Kayla's Garden", "Choose a plant passport first.")
                 return
             title = sanitize_text(self.technique_title_entry.get(), max_chars=160)
-            summary = sanitize_text(self._textbox_value(self.technique_summary_box), max_chars=2000)
+            summary = sanitize_text(self.technique_summary_box.get("1.0", "end"), max_chars=2000)
             if not title or not summary:
                 messagebox.showwarning("Kayla's Garden", "Enter at least a technique title and summary.")
                 return
-            steps = [item.strip() for item in self._textbox_value(self.technique_steps_box).splitlines() if item.strip()]
+            steps = [item.strip() for item in self.technique_steps_box.get("1.0", "end").splitlines() if item.strip()]
             tags = [item.strip() for item in self.technique_tags_entry.get().split(",") if item.strip()]
             self._run_worker(
                 lambda: self.runtime.share_technique(
@@ -5119,7 +5474,7 @@ if ctk is not None:
                     hive_username=sanitize_text(self.peer_hive_username_entry.get(), max_chars=80),
                     ipfs_user_id=sanitize_text(self.peer_ipfs_user_id_entry.get(), max_chars=160),
                     pin_group=sanitize_text(self.peer_pin_group_entry.get(), max_chars=160),
-                    notes=sanitize_text(self._textbox_value(self.peer_notes_box), max_chars=1200),
+                    notes=sanitize_text(self.peer_notes_box.get("1.0", "end"), max_chars=1200),
                 ),
                 self._after_community_action,
                 status="Adding active plant user to the community graph...",
@@ -5130,7 +5485,7 @@ if ctk is not None:
             if not group_name:
                 messagebox.showwarning("Kayla's Garden", "Enter a pin group name first.")
                 return
-            description = sanitize_text(self._textbox_value(self.community_group_description_box), max_chars=2000)
+            description = sanitize_text(self.community_group_description_box.get("1.0", "end"), max_chars=2000)
             self._run_worker(
                 lambda: self.runtime.create_pin_group(
                     name=group_name,
@@ -5147,7 +5502,7 @@ if ctk is not None:
             if not group_ref:
                 messagebox.showwarning("Kayla's Garden", "Enter a pin group name first.")
                 return
-            body = sanitize_text(self._textbox_value(self.community_comment_box), max_chars=4000)
+            body = sanitize_text(self.community_comment_box.get("1.0", "end"), max_chars=4000)
             if not body:
                 messagebox.showwarning("Kayla's Garden", "Enter a community comment first.")
                 return
@@ -5171,7 +5526,7 @@ if ctk is not None:
                 messagebox.showwarning("Kayla's Garden", "Enter both a pin group and a CID first.")
                 return
             target_peer_ids = [item.strip() for item in self.community_pin_request_peers_entry.get().split(",") if item.strip()]
-            note = sanitize_text(self._textbox_value(self.community_pin_request_note_box), max_chars=2000)
+            note = sanitize_text(self.community_pin_request_note_box.get("1.0", "end"), max_chars=2000)
             self._run_worker(
                 lambda: self.runtime.request_peer_pin(
                     group_ref=group_ref,
