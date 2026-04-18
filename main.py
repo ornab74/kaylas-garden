@@ -533,6 +533,8 @@ DEFAULT_SETTINGS = {
     "hive_account": "",
     "hive_broadcast_enabled": False,
     "trusted_nodes": list(DEFAULT_TRUSTED_NODES),
+    "require_trusted_transfer_source": False,
+    "trusted_transfer_sources": [],
     "bootstrap_complete": False,
 }
 SECRET_NETWORK_KEYS = (
@@ -969,6 +971,12 @@ def load_settings(paths: Optional[GardenPaths] = None) -> Dict[str, Any]:
     settings["hive_account"] = sanitize_text(settings.get("hive_account"), max_chars=80)
     settings["hive_broadcast_enabled"] = bool(settings.get("hive_broadcast_enabled", False))
     settings["trusted_nodes"] = list(settings.get("trusted_nodes") or DEFAULT_TRUSTED_NODES)
+    settings["require_trusted_transfer_source"] = bool(settings.get("require_trusted_transfer_source", False))
+    settings["trusted_transfer_sources"] = [
+        sanitize_text(item, max_chars=160)
+        for item in list(settings.get("trusted_transfer_sources") or [])
+        if sanitize_text(item, max_chars=160)
+    ]
     return settings
 
 
@@ -3175,6 +3183,154 @@ class KaylasGardenRuntime:
         )
         del history[:-24]
 
+    def _transfer_receipts(self) -> List[Dict[str, Any]]:
+        notes = self.state.setdefault("runtime_notes", {})
+        receipts = notes.setdefault("transfer_receipts", [])
+        if not isinstance(receipts, list):
+            receipts = []
+            notes["transfer_receipts"] = receipts
+        return receipts
+
+    def _trusted_transfer_registry(self) -> List[Dict[str, Any]]:
+        notes = self.state.setdefault("runtime_notes", {})
+        registry = notes.setdefault("trusted_transfer_sources", [])
+        if not isinstance(registry, list):
+            registry = []
+            notes["trusted_transfer_sources"] = registry
+        return registry
+
+    def _normalize_transfer_source(self, raw: Mapping[str, Any]) -> Dict[str, str]:
+        return {
+            "garden_name": sanitize_text(raw.get("garden_name"), max_chars=120),
+            "sync_id": sanitize_text(raw.get("sync_id"), max_chars=80),
+            "fingerprint": sanitize_text(raw.get("fingerprint"), max_chars=128),
+            "display_name": sanitize_text(raw.get("display_name"), max_chars=120),
+            "device_label": sanitize_text(raw.get("device_label"), max_chars=120),
+        }
+
+    def _transfer_source_allowed_values(self) -> set[str]:
+        allowed: set[str] = set()
+        for item in list(self.settings.get("trusted_transfer_sources") or []):
+            clean = sanitize_text(item, max_chars=160)
+            if clean:
+                allowed.add(clean)
+        for item in self._trusted_transfer_registry():
+            if not isinstance(item, dict):
+                continue
+            for key in ("sync_id", "fingerprint"):
+                clean = sanitize_text(item.get(key), max_chars=160)
+                if clean:
+                    allowed.add(clean)
+        return allowed
+
+    def _is_trusted_transfer_source(self, source: Mapping[str, Any]) -> bool:
+        clean_source = self._normalize_transfer_source(source)
+        allowed = self._transfer_source_allowed_values()
+        return bool(
+            clean_source["sync_id"]
+            and clean_source["sync_id"] in allowed
+            or clean_source["fingerprint"]
+            and clean_source["fingerprint"] in allowed
+        )
+
+    def _find_transfer_receipt(self, bundle_sha256: str, *, kind: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        clean_hash = sanitize_text(bundle_sha256, max_chars=128)
+        clean_kind = sanitize_text(kind, max_chars=32) if kind else ""
+        if not clean_hash:
+            return None
+        for item in reversed(self._transfer_receipts()):
+            if not isinstance(item, dict):
+                continue
+            if clean_kind and sanitize_text(item.get("kind"), max_chars=32) != clean_kind:
+                continue
+            if sanitize_text(item.get("bundle_sha256"), max_chars=128) == clean_hash:
+                return item
+        return None
+
+    def _write_transfer_receipt(self, payload: Mapping[str, Any]) -> Dict[str, Any]:
+        receipt = json.loads(json.dumps(payload, ensure_ascii=True))
+        bundle_sha256 = sanitize_text(receipt.get("bundle_sha256"), max_chars=128)
+        receipt_kind = sanitize_text(receipt.get("kind") or "receipt", max_chars=32)
+        if not bundle_sha256:
+            raise ValueError("Transfer receipt requires a bundle SHA-256.")
+        receipts = self._transfer_receipts()
+        receipts[:] = [
+            item
+            for item in receipts
+            if not isinstance(item, dict)
+            or sanitize_text(item.get("bundle_sha256"), max_chars=128) != bundle_sha256
+            or sanitize_text(item.get("kind"), max_chars=32) != receipt_kind
+        ]
+        receipt.setdefault("receipt_id", f"receipt-{uuid.uuid4().hex[:16]}")
+        receipt["kind"] = receipt_kind
+        receipt["bundle_sha256"] = bundle_sha256
+        receipt["recorded_at"] = sanitize_text(receipt.get("recorded_at") or now_iso(), max_chars=64)
+        receipt_path = self.paths.reports_dir / f"transfer-receipt-{receipt_kind}-{bundle_sha256[:16]}.json"
+        receipt["receipt_path"] = str(receipt_path)
+        receipts.append(receipt)
+        del receipts[:-48]
+        _atomic_write_bytes(receipt_path, json.dumps(receipt, indent=2, ensure_ascii=True).encode("utf-8"))
+        return receipt
+
+    def _transfer_manifest_counts(self, records: Mapping[str, Any], attachments: Sequence[Mapping[str, Any]]) -> Dict[str, int]:
+        return {
+            "plant_count": len(records.get("plants") or {}),
+            "diagnosis_count": len(records.get("diagnoses") or []),
+            "health_checkin_count": len(records.get("health_checkins") or []),
+            "shared_technique_count": len(records.get("shared_techniques") or []),
+            "guide_thread_count": len(records.get("guide_threads") or []),
+            "case_report_count": len(records.get("case_reports") or []),
+            "claim_count": len(records.get("trust_claims") or []),
+            "review_count": len(records.get("claim_reviews") or []),
+            "peer_user_count": len(records.get("peer_users") or []),
+            "pin_group_count": len(records.get("pin_groups") or []),
+            "pin_group_comment_count": len(records.get("pin_group_comments") or []),
+            "peer_pin_request_count": len(records.get("peer_pin_requests") or []),
+            "attachment_count": len(attachments),
+        }
+
+    def _bundle_overview(
+        self,
+        package: Mapping[str, Any],
+        *,
+        bundle_path: Union[str, Path],
+        bundle_sha256: str,
+    ) -> Dict[str, Any]:
+        records = package.get("records") or {}
+        attachments = list(package.get("attachments") or [])
+        manifest = dict(package.get("manifest") or {})
+        source = self._normalize_transfer_source(package.get("source") or {})
+        actual_counts = self._transfer_manifest_counts(records if isinstance(records, dict) else {}, attachments)
+        manifest_counts = {
+            key: int(manifest.get(key, actual_counts.get(key, 0))) if str(manifest.get(key, actual_counts.get(key, 0))).isdigit() else actual_counts.get(key, 0)
+            for key in actual_counts
+        }
+        warnings = [
+            sanitize_text(item, max_chars=240)
+            for item in list(package.get("warnings") or [])
+            if sanitize_text(item, max_chars=240)
+        ]
+        existing_receipt = self._find_transfer_receipt(bundle_sha256, kind="import")
+        return {
+            "bundle_path": str(Path(bundle_path).expanduser()),
+            "bundle_version": sanitize_text(package.get("bundle_version") or "unknown", max_chars=80),
+            "bundle_sha256": sanitize_text(bundle_sha256, max_chars=128),
+            "created_at": sanitize_text(package.get("created_at"), max_chars=64),
+            "scope": sanitize_text(package.get("scope") or "unknown", max_chars=24),
+            "source": source,
+            "source_trusted": self._is_trusted_transfer_source(source),
+            "require_trusted_source": bool(self.settings.get("require_trusted_transfer_source", False)),
+            "already_imported": existing_receipt is not None,
+            "existing_receipt": existing_receipt,
+            "manifest_counts": manifest_counts,
+            "actual_counts": actual_counts,
+            "manifest_matches_records": manifest_counts == actual_counts,
+            "manifest_sha256": sha256_bytes(canonical_json(manifest_counts)),
+            "portable_signature_verified": False,
+            "signature_scheme": sanitize_text((package.get("security") or {}).get("portable_signature_scheme") or "device-local HMAC only", max_chars=120),
+            "warnings": warnings,
+        }
+
     def vault_security_status(self) -> Dict[str, Any]:
         key_status = self.vault.key_status()
         leafvault_objects = len([path for path in self.paths.leafvault_dir.rglob("*.aes") if path.is_file()])
@@ -3187,6 +3343,8 @@ class KaylasGardenRuntime:
             "leafvault_object_count": leafvault_objects,
             "sealed_model_present": self.paths.encrypted_model_path.exists(),
             "package_count": len(list(self.paths.reports_dir.glob("*.kgx"))),
+            "transfer_receipt_count": len(self._transfer_receipts()),
+            "trusted_transfer_source_count": len(self._trusted_transfer_registry()),
             "transfer_exports": len(exports),
             "transfer_imports": len(imports),
             "key_rotation_events": len(key_rotations),
@@ -3213,6 +3371,65 @@ class KaylasGardenRuntime:
         self.save()
         return status
 
+    def list_trusted_transfer_sources(self) -> List[Dict[str, Any]]:
+        sources = [item for item in self._trusted_transfer_registry() if isinstance(item, dict)]
+        return sorted(
+            [json.loads(json.dumps(item, ensure_ascii=True)) for item in sources],
+            key=lambda item: sanitize_text(item.get("trusted_at"), max_chars=64),
+            reverse=True,
+        )
+
+    def trust_transfer_source(
+        self,
+        *,
+        sync_id: str,
+        fingerprint: str,
+        alias: str = "",
+        notes: str = "",
+    ) -> Dict[str, Any]:
+        clean_sync_id = sanitize_text(sync_id, max_chars=80)
+        clean_fingerprint = sanitize_text(fingerprint, max_chars=128)
+        if not clean_sync_id and not clean_fingerprint:
+            raise ValueError("A transfer source needs a sync id or fingerprint before it can be trusted.")
+        registry = self._trusted_transfer_registry()
+        existing = None
+        for item in registry:
+            if not isinstance(item, dict):
+                continue
+            if clean_sync_id and sanitize_text(item.get("sync_id"), max_chars=80) == clean_sync_id:
+                existing = item
+                break
+            if clean_fingerprint and sanitize_text(item.get("fingerprint"), max_chars=128) == clean_fingerprint:
+                existing = item
+                break
+        record = existing or {}
+        record.update(
+            {
+                "sync_id": clean_sync_id,
+                "fingerprint": clean_fingerprint,
+                "alias": sanitize_text(alias, max_chars=120),
+                "notes": sanitize_text(notes, max_chars=240),
+                "trusted_at": now_iso(),
+            }
+        )
+        if existing is None:
+            registry.append(record)
+        del registry[:-48]
+        self._record_transfer_event(
+            "trust-source",
+            {
+                "sync_id": clean_sync_id,
+                "fingerprint": clean_fingerprint,
+                "alias": sanitize_text(alias, max_chars=120),
+            },
+        )
+        self.save()
+        return {
+            "trusted": True,
+            "trusted_source_count": len([item for item in registry if isinstance(item, dict)]),
+            "source": json.loads(json.dumps(record, ensure_ascii=True)),
+        }
+
     def _non_secret_settings_snapshot(self) -> Dict[str, Any]:
         return {
             "garden_name": sanitize_text(self.settings.get("garden_name") or "Kayla's Garden", max_chars=120),
@@ -3222,6 +3439,12 @@ class KaylasGardenRuntime:
             "local_first_only": bool(self.settings.get("local_first_only", True)),
             "cloud_mode": bool(self.settings.get("cloud_mode", False)),
             "trusted_nodes": [sanitize_text(item, max_chars=80) for item in list(self.settings.get("trusted_nodes") or []) if sanitize_text(item, max_chars=80)],
+            "require_trusted_transfer_source": bool(self.settings.get("require_trusted_transfer_source", False)),
+            "trusted_transfer_sources": [
+                sanitize_text(item, max_chars=160)
+                for item in list(self.settings.get("trusted_transfer_sources") or [])
+                if sanitize_text(item, max_chars=160)
+            ],
         }
 
     def _bundle_records_for_scope(self, plant_id: Optional[str]) -> Dict[str, Any]:
@@ -3389,6 +3612,15 @@ class KaylasGardenRuntime:
                     seen.add(actual_digest)
         return attachments, warnings
 
+    def inspect_secure_bundle(self, *, bundle_path: Union[str, Path], bundle_password: str) -> Dict[str, Any]:
+        source = Path(bundle_path).expanduser().resolve(strict=True)
+        sealed = source.read_bytes()
+        raw_payload = decrypt_transfer_package(sealed, bundle_password)
+        package = json.loads(raw_payload.decode("utf-8"))
+        if not isinstance(package, dict):
+            raise ValueError("Transfer package payload is invalid.")
+        return self._bundle_overview(package, bundle_path=source, bundle_sha256=sha256_bytes(sealed))
+
     def export_secure_bundle(
         self,
         *,
@@ -3401,6 +3633,7 @@ class KaylasGardenRuntime:
             target = target.with_suffix(".kgx")
         records = self._bundle_records_for_scope(plant_id)
         attachments, warnings = self._bundle_attachments(records)
+        manifest = self._transfer_manifest_counts(records, attachments)
         payload = {
             "bundle_version": "kaylas-garden-transfer-v1",
             "created_at": now_iso(),
@@ -3409,11 +3642,14 @@ class KaylasGardenRuntime:
                 "garden_name": sanitize_text(self.state.get("garden", {}).get("name") or "Kayla's Garden", max_chars=120),
                 "sync_id": self.identity.sync_id,
                 "fingerprint": self.identity.fingerprint,
+                "display_name": self.identity.display_name,
+                "device_label": self.identity.device_label,
             },
             "security": {
                 "cipher": "AES-256-GCM",
                 "secrets_included": False,
                 "attachments_resealed": True,
+                "portable_signature_scheme": "device-local HMAC only",
             },
             "settings": self._non_secret_settings_snapshot(),
             "garden": json.loads(json.dumps(self.state.get("garden") or {}, ensure_ascii=True)),
@@ -3421,37 +3657,61 @@ class KaylasGardenRuntime:
             "records": records,
             "attachments": attachments,
             "warnings": warnings,
-            "manifest": {
-                "plant_count": len(records.get("plants") or {}),
-                "diagnosis_count": len(records.get("diagnoses") or []),
-                "health_checkin_count": len(records.get("health_checkins") or []),
-                "shared_technique_count": len(records.get("shared_techniques") or []),
-                "guide_thread_count": len(records.get("guide_threads") or []),
-                "case_report_count": len(records.get("case_reports") or []),
-                "claim_count": len(records.get("trust_claims") or []),
-                "review_count": len(records.get("claim_reviews") or []),
-                "attachment_count": len(attachments),
-            },
+            "manifest": manifest,
         }
         payload["manifest_signature"] = self.identity_service.sign(payload["manifest"])
         sealed = encrypt_transfer_package(canonical_json(payload), bundle_password)
         _atomic_write_bytes(target, sealed)
+        bundle_sha256 = sha256_bytes(sealed)
+        manifest_sha256 = sha256_bytes(canonical_json(payload["manifest"]))
         event = {
             "path": str(target),
             "scope": payload["scope"],
             "plant_count": payload["manifest"]["plant_count"],
             "attachment_count": payload["manifest"]["attachment_count"],
+            "bundle_sha256": bundle_sha256,
         }
         self._record_transfer_event("export", event)
+        receipt = self._write_transfer_receipt(
+            {
+                "kind": "export",
+                "bundle_sha256": bundle_sha256,
+                "manifest_sha256": manifest_sha256,
+                "bundle_path": str(target),
+                "scope": payload["scope"],
+                "source": self._normalize_transfer_source(payload["source"]),
+                "source_trusted": True,
+                "manifest_counts": dict(payload["manifest"]),
+            }
+        )
         self.save()
-        return {"bundle_path": str(target), **event, "warnings": warnings}
+        return {
+            "bundle_path": str(target),
+            "bundle_sha256": bundle_sha256,
+            "manifest_sha256": manifest_sha256,
+            "receipt_path": receipt.get("receipt_path"),
+            **event,
+            "warnings": warnings,
+        }
 
-    def import_secure_bundle(self, *, bundle_path: Union[str, Path], bundle_password: str) -> Dict[str, Any]:
+    def import_secure_bundle(
+        self,
+        *,
+        bundle_path: Union[str, Path],
+        bundle_password: str,
+        allow_duplicate: bool = False,
+    ) -> Dict[str, Any]:
         source = Path(bundle_path).expanduser().resolve(strict=True)
-        raw_payload = decrypt_transfer_package(source.read_bytes(), bundle_password)
+        sealed = source.read_bytes()
+        raw_payload = decrypt_transfer_package(sealed, bundle_password)
         package = json.loads(raw_payload.decode("utf-8"))
         if not isinstance(package, dict):
             raise ValueError("Transfer package payload is invalid.")
+        overview = self._bundle_overview(package, bundle_path=source, bundle_sha256=sha256_bytes(sealed))
+        if overview.get("already_imported") and not allow_duplicate:
+            raise ValueError("This transfer bundle has already been imported on this device. Use allow_duplicate to import it again.")
+        if overview.get("require_trusted_source") and not overview.get("source_trusted"):
+            raise ValueError("This device is configured to accept only trusted transfer sources. Trust the bundle source first.")
         records = package.get("records") or {}
         attachments = list(package.get("attachments") or [])
         if not isinstance(records, dict):
@@ -3461,7 +3721,10 @@ class KaylasGardenRuntime:
         for attachment in attachments:
             if not isinstance(attachment, dict):
                 continue
-            payload_bytes = bytes.fromhex(sanitize_text(attachment.get("payload_hex"), max_chars=10_000_000))
+            payload_hex = attachment.get("payload_hex")
+            if not isinstance(payload_hex, str):
+                raise ValueError("Transfer attachment payload is invalid.")
+            payload_bytes = bytes.fromhex(payload_hex)
             digest = sanitize_text(attachment.get("digest"), max_chars=128)
             if not digest or sha256_bytes(payload_bytes) != digest:
                 raise ValueError("Transfer attachment digest verification failed.")
@@ -3693,12 +3956,37 @@ class KaylasGardenRuntime:
                 "scope": sanitize_text(package.get("scope") or "unknown", max_chars=24),
                 "plant_count": imported_plants,
                 "attachment_count": imported_attachment_count,
+                "bundle_sha256": overview.get("bundle_sha256"),
+                "source_sync_id": (overview.get("source") or {}).get("sync_id"),
             },
+        )
+        receipt = self._write_transfer_receipt(
+            {
+                "kind": "import",
+                "bundle_sha256": overview.get("bundle_sha256"),
+                "manifest_sha256": overview.get("manifest_sha256"),
+                "bundle_path": str(source),
+                "scope": sanitize_text(package.get("scope") or "unknown", max_chars=24),
+                "source": overview.get("source") or {},
+                "source_trusted": bool(overview.get("source_trusted")),
+                "manifest_counts": overview.get("manifest_counts") or {},
+                "import_counts": {
+                    "plants": imported_plants,
+                    "manifests": imported_manifests,
+                    "attachments": imported_attachment_count,
+                    **imported_counts,
+                },
+            }
         )
         self.save()
         return {
             "bundle_path": str(source),
             "scope": sanitize_text(package.get("scope") or "unknown", max_chars=24),
+            "bundle_sha256": overview.get("bundle_sha256"),
+            "manifest_sha256": overview.get("manifest_sha256"),
+            "source_trusted": bool(overview.get("source_trusted")),
+            "allow_duplicate": bool(allow_duplicate),
+            "receipt_path": receipt.get("receipt_path"),
             "imported_plants": imported_plants,
             "imported_manifests": imported_manifests,
             "imported_attachments": imported_attachment_count,
@@ -3707,11 +3995,18 @@ class KaylasGardenRuntime:
 
     def transfer_status(self) -> Dict[str, Any]:
         history = self._transfer_history()
+        receipts = self._transfer_receipts()
+        trusted_sources = self.list_trusted_transfer_sources()
         return {
             "reports_dir": str(self.paths.reports_dir),
             "bundle_count": len(list(self.paths.reports_dir.glob("*.kgx"))),
+            "receipt_count": len(receipts),
             "export_count": len([item for item in history if sanitize_text(item.get("kind"), max_chars=40) == "export"]),
             "import_count": len([item for item in history if sanitize_text(item.get("kind"), max_chars=40) == "import"]),
+            "require_trusted_source": bool(self.settings.get("require_trusted_transfer_source", False)),
+            "trusted_source_count": len(trusted_sources),
+            "trusted_sources": trusted_sources[:8],
+            "recent_receipts": list(receipts[-8:]),
             "recent_events": list(history[-12:]),
         }
 
@@ -5236,6 +5531,8 @@ class KaylasGardenRuntime:
             "bloomtrace": self.ledger.status(),
             "rootmesh": self.syncer.status(),
             "secret_vault": self.network_secret_status(),
+            "vault_security": self.vault_security_status(),
+            "transfer": self.transfer_status(),
             "oqs": self.oqs_advisor.status(),
             "pending_anchor_records": len(list(self.state.get("anchor_queue") or [])),
             "pending_sync_records": len(list(self.state.get("sync_queue") or [])),
@@ -5313,6 +5610,7 @@ if ctk is not None:
             self.trust_claim_var = tk.StringVar(value="")
             self.transfer_plant_var = tk.StringVar(value="")
             self.transfer_scope_var = tk.StringVar(value="current-plant")
+            self.require_trusted_transfer_var = tk.StringVar(value="off")
             self.network_mode_var = tk.StringVar(value="local-first")
             self.local_first_var = tk.StringVar(value="on")
             self.cloud_mode_var = tk.StringVar(value="off")
@@ -5779,12 +6077,16 @@ if ctk is not None:
             self.network_surface_design.grid(row=3, column=0, padx=18, pady=(0, 18), sticky="nsew")
 
         def _build_care_lab_tab(self, tab: Any) -> None:
-            tab.grid_columnconfigure(0, weight=2)
-            tab.grid_columnconfigure(1, weight=3)
+            tab.grid_columnconfigure(0, weight=1)
             tab.grid_rowconfigure(0, weight=1)
 
-            left = ctk.CTkFrame(tab)
-            left.grid(row=0, column=0, padx=18, pady=18, sticky="nsew")
+            scroll = ctk.CTkScrollableFrame(tab)
+            scroll.grid(row=0, column=0, padx=0, pady=0, sticky="nsew")
+            scroll.grid_columnconfigure(0, weight=2)
+            scroll.grid_columnconfigure(1, weight=3)
+
+            left = ctk.CTkFrame(scroll)
+            left.grid(row=0, column=0, padx=18, pady=18, sticky="new")
             left.grid_columnconfigure(0, weight=1)
 
             ctk.CTkLabel(left, text="Diagnosis + Health Check-Ins", font=ctk.CTkFont(size=20, weight="bold")).grid(
@@ -5823,10 +6125,9 @@ if ctk is not None:
                 row=17, column=0, padx=18, pady=(8, 18), sticky="ew"
             )
 
-            right = ctk.CTkFrame(tab)
-            right.grid(row=0, column=1, padx=(0, 18), pady=18, sticky="nsew")
+            right = ctk.CTkFrame(scroll)
+            right.grid(row=0, column=1, padx=(0, 18), pady=18, sticky="new")
             right.grid_columnconfigure(0, weight=1)
-            right.grid_rowconfigure(11, weight=1)
 
             ctk.CTkLabel(right, text="Shared Technique Card", font=ctk.CTkFont(size=20, weight="bold")).grid(
                 row=0, column=0, padx=18, pady=(18, 8), sticky="w"
@@ -5858,10 +6159,10 @@ if ctk is not None:
             self.technique_steps_box.grid(row=17, column=0, padx=18, pady=6, sticky="ew")
             self.technique_steps_box.insert("1.0", "Inspect underside of leaves\nRemove worst-hit leaves\nIncrease spacing / airflow\nRe-check after 24 hours")
             ctk.CTkButton(right, text="Publish Shared Technique", command=self.on_publish_technique).grid(
-                row=18, column=0, padx=18, pady=(8, 10), sticky="new"
+                row=18, column=0, padx=18, pady=(8, 10), sticky="ew"
             )
             self.care_lab_result = self._make_textbox(right, height=220)
-            self.care_lab_result.grid(row=19, column=0, padx=18, pady=(0, 18), sticky="nsew")
+            self.care_lab_result.grid(row=19, column=0, padx=18, pady=(0, 18), sticky="ew")
 
         def _build_insights_tab(self, tab: Any) -> None:
             tab.grid_columnconfigure(0, weight=2)
@@ -5895,21 +6196,22 @@ if ctk is not None:
             self.insights_activity.grid(row=1, column=0, padx=18, pady=(0, 18), sticky="nsew")
 
         def _build_trust_lab_tab(self, tab: Any) -> None:
-            tab.grid_columnconfigure(0, weight=2)
-            tab.grid_columnconfigure(1, weight=3)
+            tab.grid_columnconfigure(0, weight=1)
             tab.grid_rowconfigure(0, weight=1)
 
-            left = ctk.CTkFrame(tab)
-            left.grid(row=0, column=0, padx=18, pady=18, sticky="nsew")
+            scroll = ctk.CTkScrollableFrame(tab)
+            scroll.grid(row=0, column=0, padx=0, pady=0, sticky="nsew")
+            scroll.grid_columnconfigure(0, weight=2)
+            scroll.grid_columnconfigure(1, weight=3)
+
+            left = ctk.CTkFrame(scroll)
+            left.grid(row=0, column=0, padx=18, pady=18, sticky="new")
             left.grid_columnconfigure(0, weight=1)
-            left.grid_rowconfigure(1, weight=1)
-            left.grid_rowconfigure(3, weight=0)
-            left.grid_rowconfigure(5, weight=1)
             ctk.CTkLabel(left, text="Trust Lab", font=ctk.CTkFont(size=22, weight="bold")).grid(
                 row=0, column=0, padx=18, pady=(18, 10), sticky="w"
             )
             self.trust_lab_blueprint = self._make_textbox(left, height=180)
-            self.trust_lab_blueprint.grid(row=1, column=0, padx=18, pady=(0, 16), sticky="nsew")
+            self.trust_lab_blueprint.grid(row=1, column=0, padx=18, pady=(0, 16), sticky="ew")
 
             promote = ctk.CTkFrame(left)
             promote.grid(row=2, column=0, padx=18, pady=(0, 16), sticky="ew")
@@ -5941,19 +6243,16 @@ if ctk is not None:
                 row=4, column=0, padx=18, pady=(0, 10), sticky="w"
             )
             self.trust_lab_stake = self._make_textbox(left, height=180)
-            self.trust_lab_stake.grid(row=5, column=0, padx=18, pady=(0, 18), sticky="nsew")
+            self.trust_lab_stake.grid(row=5, column=0, padx=18, pady=(0, 18), sticky="ew")
 
-            right = ctk.CTkFrame(tab)
-            right.grid(row=0, column=1, padx=(0, 18), pady=18, sticky="nsew")
+            right = ctk.CTkFrame(scroll)
+            right.grid(row=0, column=1, padx=(0, 18), pady=18, sticky="new")
             right.grid_columnconfigure(0, weight=1)
-            right.grid_rowconfigure(1, weight=1)
-            right.grid_rowconfigure(3, weight=0)
-            right.grid_rowconfigure(5, weight=1)
             ctk.CTkLabel(right, text="Claim Lifecycle", font=ctk.CTkFont(size=20, weight="bold")).grid(
                 row=0, column=0, padx=18, pady=(18, 10), sticky="w"
             )
             self.trust_lab_claims = self._make_textbox(right, height=180)
-            self.trust_lab_claims.grid(row=1, column=0, padx=18, pady=(0, 16), sticky="nsew")
+            self.trust_lab_claims.grid(row=1, column=0, padx=18, pady=(0, 16), sticky="ew")
 
             claim_card = ctk.CTkFrame(right)
             claim_card.grid(row=2, column=0, padx=18, pady=(0, 16), sticky="ew")
@@ -5997,7 +6296,7 @@ if ctk is not None:
                 row=4, column=0, padx=18, pady=(0, 10), sticky="w"
             )
             self.trust_lab_auditors = self._make_textbox(right, height=180)
-            self.trust_lab_auditors.grid(row=5, column=0, padx=18, pady=(0, 18), sticky="nsew")
+            self.trust_lab_auditors.grid(row=5, column=0, padx=18, pady=(0, 18), sticky="ew")
 
         def _build_community_tab(self, tab: Any) -> None:
             tab.grid_columnconfigure(0, weight=1)
@@ -6216,6 +6515,20 @@ if ctk is not None:
             ctk.CTkButton(transfer_import_buttons, text="Choose Import File", command=self.on_choose_transfer_import_path).grid(row=0, column=0, padx=(0, 6), sticky="ew")
             ctk.CTkButton(transfer_import_buttons, text="Import Encrypted Bundle", command=self.on_import_transfer_bundle).grid(row=0, column=1, padx=(6, 0), sticky="ew")
 
+            ctk.CTkLabel(settings_frame, text="Transfer Trust Policy", font=ctk.CTkFont(size=18, weight="bold")).grid(row=106, column=0, padx=18, pady=(0, 8), sticky="w")
+            self._field_label(settings_frame, 107, "Require trusted source", "When on, bundles must come from a source fingerprint or sync id you already trust before import is allowed.")
+            self.require_trusted_transfer_menu = ctk.CTkOptionMenu(settings_frame, variable=self.require_trusted_transfer_var, values=["off", "on"])
+            self.require_trusted_transfer_menu.grid(row=109, column=0, padx=18, pady=6, sticky="ew")
+            self._field_label(settings_frame, 110, "Trusted source ids / fingerprints", "Comma-separated sync ids or fingerprints that this device will treat as approved transfer sources.")
+            self.transfer_trusted_sources_entry = ctk.CTkEntry(settings_frame, placeholder_text="sync-..., 71ef..., sync-...")
+            self.transfer_trusted_sources_entry.grid(row=112, column=0, padx=18, pady=6, sticky="ew")
+            transfer_policy_buttons = ctk.CTkFrame(settings_frame, fg_color="transparent")
+            transfer_policy_buttons.grid(row=113, column=0, padx=18, pady=(6, 18), sticky="ew")
+            transfer_policy_buttons.grid_columnconfigure(0, weight=1)
+            transfer_policy_buttons.grid_columnconfigure(1, weight=1)
+            ctk.CTkButton(transfer_policy_buttons, text="Inspect Bundle", command=self.on_inspect_transfer_bundle).grid(row=0, column=0, padx=(0, 6), sticky="ew")
+            ctk.CTkButton(transfer_policy_buttons, text="Trust Bundle Source", command=self.on_trust_transfer_bundle_source).grid(row=0, column=1, padx=(6, 0), sticky="ew")
+
             queue_frame = ctk.CTkFrame(scroll)
             queue_frame.grid(row=0, column=1, padx=(0, 18), pady=18, sticky="nsew")
             queue_frame.grid_columnconfigure(0, weight=1)
@@ -6224,6 +6537,7 @@ if ctk is not None:
             queue_frame.grid_rowconfigure(5, weight=1)
             queue_frame.grid_rowconfigure(7, weight=1)
             queue_frame.grid_rowconfigure(9, weight=1)
+            queue_frame.grid_rowconfigure(11, weight=1)
             ctk.CTkLabel(queue_frame, text="Managed IPFS Status", font=ctk.CTkFont(size=20, weight="bold")).grid(row=0, column=0, padx=18, pady=(18, 10), sticky="w")
             self.daemon_status_text = self._make_textbox(queue_frame, height=220)
             self.daemon_status_text.grid(row=1, column=0, padx=18, pady=(0, 16), sticky="nsew")
@@ -6239,6 +6553,9 @@ if ctk is not None:
             ctk.CTkLabel(queue_frame, text="Transfer Status", font=ctk.CTkFont(size=18, weight="bold")).grid(row=8, column=0, padx=18, pady=(0, 10), sticky="w")
             self.transfer_status_text = self._make_textbox(queue_frame, height=220)
             self.transfer_status_text.grid(row=9, column=0, padx=18, pady=(0, 18), sticky="nsew")
+            ctk.CTkLabel(queue_frame, text="Transfer Trust", font=ctk.CTkFont(size=18, weight="bold")).grid(row=10, column=0, padx=18, pady=(0, 10), sticky="w")
+            self.transfer_trust_text = self._make_textbox(queue_frame, height=200)
+            self.transfer_trust_text.grid(row=11, column=0, padx=18, pady=(0, 18), sticky="nsew")
 
         def _build_models_tab(self, tab: Any) -> None:
             tab.grid_columnconfigure(0, weight=1)
@@ -6272,6 +6589,10 @@ if ctk is not None:
                 textbox.configure(wrap="word")
             widget.delete("1.0", "end")
             widget.insert("1.0", text)
+
+        def _clear_entry_fields(self, *entries: Any) -> None:
+            for entry in entries:
+                entry.delete(0, "end")
 
         def _apply_guide_text_bindings(self) -> None:
             textbox = getattr(self.guide_question_box, "_textbox", None)
@@ -6808,6 +7129,7 @@ if ctk is not None:
             leafvault = status.get("leafvault") or {}
             bloom = status.get("bloomtrace") or {}
             rootmesh = status.get("rootmesh") or {}
+            transfer = status.get("transfer") or {}
             return "\n".join([
                 "Publishing surface",
                 "",
@@ -6827,6 +7149,10 @@ if ctk is not None:
                 f"- Sync engine ready: {rootmesh.get('enabled') if 'enabled' in rootmesh else True}",
                 f"- Pending anchors: {status.get('pending_anchor_records', 0)}",
                 f"- Pending sync records: {status.get('pending_sync_records', 0)}",
+                "",
+                "Transfer policy",
+                f"- Trusted-source gate: {transfer.get('require_trusted_source')}",
+                f"- Trusted sources: {transfer.get('trusted_source_count', 0)}",
             ])
 
         def _build_daemon_status_text(self, status: Mapping[str, Any]) -> str:
@@ -6876,6 +7202,8 @@ if ctk is not None:
                 f"LeafVault objects: {status.get('leafvault_object_count', 0)}",
                 f"Sealed model present: {status.get('sealed_model_present')}",
                 f"Package files: {status.get('package_count', 0)}",
+                f"Transfer receipts: {status.get('transfer_receipt_count', 0)}",
+                f"Trusted sources: {status.get('trusted_transfer_source_count', 0)}",
                 f"Key rotations: {status.get('key_rotation_events', 0)}",
             ]
             if latest:
@@ -6892,8 +7220,10 @@ if ctk is not None:
                 "Secure transfer surface",
                 "",
                 f"Bundles in reports dir: {status.get('bundle_count', 0)}",
+                f"Transfer receipts: {status.get('receipt_count', 0)}",
                 f"Exports: {status.get('export_count', 0)}",
                 f"Imports: {status.get('import_count', 0)}",
+                f"Require trusted source: {status.get('require_trusted_source')}",
                 "",
                 "Safety rules",
                 "- Transfer bundles exclude network secrets and vault keys.",
@@ -6905,6 +7235,35 @@ if ctk is not None:
                 for event in events[-5:]:
                     lines.append(
                         f"- {event.get('kind') or 'event'} · {event.get('recorded_at') or 'n/a'} · {event.get('path') or 'local-runtime'}"
+                    )
+            return "\n".join(lines)
+
+        def _build_transfer_trust_text(self, status: Mapping[str, Any]) -> str:
+            trusted_sources = list(status.get("trusted_sources") or [])
+            receipts = list(status.get("recent_receipts") or [])
+            lines = [
+                "Transfer trust registry",
+                "",
+                f"Trusted source count: {status.get('trusted_source_count', 0)}",
+                f"Trusted-source requirement: {status.get('require_trusted_source')}",
+                "",
+                "Trust notes",
+                "- Trust sync ids or fingerprints before turning on strict import policy.",
+                "- Inspect a bundle before import when it comes from a new garden device.",
+                "- Export receipts make duplicate-import detection auditable.",
+            ]
+            if trusted_sources:
+                lines.extend(["", "Trusted sources"])
+                for item in trusted_sources[:5]:
+                    alias = sanitize_text(item.get("alias"), max_chars=120) or sanitize_text(item.get("sync_id"), max_chars=80) or sanitize_text(item.get("fingerprint"), max_chars=18)
+                    lines.append(
+                        f"- {alias} · {sanitize_text(item.get('trusted_at'), max_chars=64) or 'n/a'}"
+                    )
+            if receipts:
+                lines.extend(["", "Recent receipts"])
+                for item in receipts[-4:]:
+                    lines.append(
+                        f"- {item.get('kind') or 'receipt'} · {item.get('scope') or 'garden'} · {str(item.get('bundle_sha256') or '')[:12]}"
                     )
             return "\n".join(lines)
 
@@ -7089,6 +7448,7 @@ if ctk is not None:
             self._set_text(self.secret_status_text, self._build_secret_status_text(self.runtime.network_secret_status()))
             self._set_text(self.vault_security_text, self._build_vault_security_text(self.runtime.vault_security_status()))
             self._set_text(self.transfer_status_text, self._build_transfer_surface_text(self.runtime.transfer_status()))
+            self._set_text(self.transfer_trust_text, self._build_transfer_trust_text(self.runtime.transfer_status()))
             self._set_text(self.community_result, self._build_community_surface_text(self.runtime.community_summary()))
             self._set_text(self.network_surface_text, self._build_network_surface_summary())
             self._set_text(self.network_surface_feed, self._build_network_surface_feed())
@@ -7234,6 +7594,7 @@ if ctk is not None:
             self.ipfs_daemon_auto_start_var.set("on" if bool(settings.get("ipfs_daemon_auto_start", False)) else "off")
             self.hive_enabled_var.set("on" if bool(settings.get("hive_enabled", False)) else "off")
             self.hive_broadcast_var.set("on" if bool(settings.get("hive_broadcast_enabled", False)) else "off")
+            self.require_trusted_transfer_var.set("on" if bool(settings.get("require_trusted_transfer_source", False)) else "off")
             for entry, value in (
                 (self.location_entry, settings.get("location") or ""),
                 (self.theme_entry, settings.get("theme") or ""),
@@ -7245,6 +7606,7 @@ if ctk is not None:
                 (self.ipfs_kubo_url_entry, settings.get("ipfs_kubo_download_url") or ""),
                 (self.hive_entry, settings.get("hive_api") or ""),
                 (self.nodes_entry, ", ".join(settings.get("trusted_nodes") or [])),
+                (self.transfer_trusted_sources_entry, ", ".join(settings.get("trusted_transfer_sources") or [])),
                 (self.secret_ipfs_user_id_entry, secrets.get("ipfs_user_id") or ""),
                 (self.secret_ipfs_pin_surface_entry, secrets.get("ipfs_pin_surface") or ""),
                 (self.secret_ipfs_pin_surface_token_entry, secrets.get("ipfs_pin_surface_token") or secrets.get("ipfs_bearer_token") or ""),
@@ -7709,7 +8071,7 @@ if ctk is not None:
             current_password = self.vault_current_password_entry.get() or self.runtime.password
             self._run_worker(
                 lambda: self.runtime.set_vault_password(new_password, current_password=current_password),
-                lambda result: self._after_action(f"Vault password updated.\n{json.dumps(result, indent=2, ensure_ascii=True)}"),
+                lambda result: (self._clear_entry_fields(self.vault_current_password_entry, self.vault_new_password_entry), self._after_action(f"Vault password updated.\n{json.dumps(result, indent=2, ensure_ascii=True)}")),
                 status="Protecting the local vault key with the new password...",
             )
 
@@ -7721,7 +8083,7 @@ if ctk is not None:
             current_password = self.vault_current_password_entry.get() or self.runtime.password
             self._run_worker(
                 lambda: self.runtime.rotate_vault_key(new_password=new_password, current_password=current_password),
-                lambda result: self._after_action(f"Vault data key rotated.\n{json.dumps(result, indent=2, ensure_ascii=True)}"),
+                lambda result: (self._clear_entry_fields(self.vault_current_password_entry, self.vault_new_password_entry), self._after_action(f"Vault data key rotated.\n{json.dumps(result, indent=2, ensure_ascii=True)}")),
                 status="Re-sealing the vault, secrets, assets, and model under a fresh data key...",
             )
 
@@ -7746,8 +8108,51 @@ if ctk is not None:
                     bundle_password=bundle_password,
                     plant_id=plant_id,
                 ),
-                lambda result: self._after_action(f"Encrypted bundle exported.\n{json.dumps(result, indent=2, ensure_ascii=True)}"),
+                lambda result: (self._clear_entry_fields(self.transfer_password_entry), self._after_action(f"Encrypted bundle exported.\n{json.dumps(result, indent=2, ensure_ascii=True)}")),
                 status="Building encrypted transfer bundle...",
+            )
+
+        def on_inspect_transfer_bundle(self) -> None:
+            bundle_password = sanitize_text(self.transfer_password_entry.get(), max_chars=256)
+            if len(bundle_password) < 8:
+                messagebox.showwarning("Kayla's Garden", "Enter the transfer bundle password first.")
+                return
+            bundle_path = sanitize_text(self.transfer_import_path_entry.get(), max_chars=400)
+            if not bundle_path:
+                messagebox.showwarning("Kayla's Garden", "Choose an encrypted transfer bundle first.")
+                return
+            self._run_worker(
+                lambda: self.runtime.inspect_secure_bundle(bundle_path=bundle_path, bundle_password=bundle_password),
+                lambda result: self._after_action(f"Bundle inspection summary.\n{json.dumps(result, indent=2, ensure_ascii=True)}"),
+                status="Inspecting transfer bundle metadata and trust posture...",
+            )
+
+        def on_trust_transfer_bundle_source(self) -> None:
+            bundle_password = sanitize_text(self.transfer_password_entry.get(), max_chars=256)
+            if len(bundle_password) < 8:
+                messagebox.showwarning("Kayla's Garden", "Enter the transfer bundle password first.")
+                return
+            bundle_path = sanitize_text(self.transfer_import_path_entry.get(), max_chars=400)
+            if not bundle_path:
+                messagebox.showwarning("Kayla's Garden", "Choose an encrypted transfer bundle first.")
+                return
+
+            def worker() -> Dict[str, Any]:
+                inspection = self.runtime.inspect_secure_bundle(bundle_path=bundle_path, bundle_password=bundle_password)
+                source = inspection.get("source") or {}
+                alias = source.get("garden_name") or source.get("display_name") or source.get("sync_id") or "trusted-garden"
+                trusted = self.runtime.trust_transfer_source(
+                    sync_id=sanitize_text(source.get("sync_id"), max_chars=80),
+                    fingerprint=sanitize_text(source.get("fingerprint"), max_chars=128),
+                    alias=sanitize_text(alias, max_chars=120),
+                    notes=f"Trusted from bundle {Path(bundle_path).name}",
+                )
+                return {"inspection": inspection, "trusted": trusted}
+
+            self._run_worker(
+                worker,
+                lambda result: self._after_action(f"Bundle source trusted.\n{json.dumps(result, indent=2, ensure_ascii=True)}"),
+                status="Adding bundle source to the trusted transfer registry...",
             )
 
         def on_import_transfer_bundle(self) -> None:
@@ -7761,7 +8166,7 @@ if ctk is not None:
                 return
             self._run_worker(
                 lambda: self.runtime.import_secure_bundle(bundle_path=bundle_path, bundle_password=bundle_password),
-                lambda result: self._after_action(f"Encrypted bundle imported.\n{json.dumps(result, indent=2, ensure_ascii=True)}"),
+                lambda result: (self._clear_entry_fields(self.transfer_password_entry), self._after_action(f"Encrypted bundle imported.\n{json.dumps(result, indent=2, ensure_ascii=True)}")),
                 status="Importing bundle and re-sealing data into the local vault...",
             )
 
@@ -7803,6 +8208,8 @@ if ctk is not None:
                 "hive_api": sanitize_text(self.hive_entry.get(), max_chars=240),
                 "hive_broadcast_enabled": self.hive_broadcast_var.get() == "on" and cloud_mode,
                 "trusted_nodes": [item.strip() for item in self.nodes_entry.get().split(",") if item.strip()],
+                "require_trusted_transfer_source": self.require_trusted_transfer_var.get() == "on",
+                "trusted_transfer_sources": [item.strip() for item in self.transfer_trusted_sources_entry.get().split(",") if item.strip()],
             }
             save_settings(settings, self.runtime.paths)
             self.runtime.reload_settings()
@@ -7898,6 +8305,29 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     secret_status = subparsers.add_parser("secret-status", help="Show encrypted network secret vault status")
     _ = secret_status
+    subparsers.add_parser("vault-security", help="Show vault hardening, transfer receipts, and key status")
+    subparsers.add_parser("transfer-status", help="Show transfer receipts, trusted sources, and recent bundle activity")
+    set_vault_password = subparsers.add_parser("set-vault-password", help="Protect or update the local vault key password")
+    set_vault_password.add_argument("--new-password", required=True)
+    rotate_vault = subparsers.add_parser("rotate-vault-key", help="Rotate the local data key and reseal stored assets")
+    rotate_vault.add_argument("--new-password", default="")
+    inspect_bundle = subparsers.add_parser("inspect-bundle", help="Decrypt and inspect a secure transfer bundle without importing it")
+    inspect_bundle.add_argument("--path", required=True)
+    inspect_bundle.add_argument("--bundle-password", required=True)
+    export_bundle = subparsers.add_parser("export-bundle", help="Export an encrypted transfer bundle")
+    export_bundle.add_argument("--path", required=True)
+    export_bundle.add_argument("--bundle-password", required=True)
+    export_bundle.add_argument("--plant-id", default="")
+    import_bundle = subparsers.add_parser("import-bundle", help="Import an encrypted transfer bundle into the local vault")
+    import_bundle.add_argument("--path", required=True)
+    import_bundle.add_argument("--bundle-password", required=True)
+    import_bundle.add_argument("--allow-duplicate", action="store_true")
+    trust_bundle_source = subparsers.add_parser("trust-transfer-source", help="Add a transfer source fingerprint or sync id to the local trust registry")
+    trust_bundle_source.add_argument("--sync-id", default="")
+    trust_bundle_source.add_argument("--fingerprint", default="")
+    trust_bundle_source.add_argument("--alias", default="")
+    trust_bundle_source.add_argument("--notes", default="")
+    subparsers.add_parser("list-trusted-transfer-sources", help="List locally trusted transfer sources")
     save_secrets = subparsers.add_parser("save-network-secrets", help="Save IPFS/Hive identities into the encrypted AES-GCM secret vault")
     save_secrets.add_argument("--ipfs-user-id", default="")
     save_secrets.add_argument("--ipfs-pin-surface", default="")
@@ -8049,6 +8479,61 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.command == "secret-status":
         print_json(runtime.network_secret_status())
+        return 0
+
+    if args.command == "vault-security":
+        print_json(runtime.vault_security_status())
+        return 0
+
+    if args.command == "transfer-status":
+        print_json(runtime.transfer_status())
+        return 0
+
+    if args.command == "set-vault-password":
+        print_json(runtime.set_vault_password(args.new_password, current_password=args.password))
+        return 0
+
+    if args.command == "rotate-vault-key":
+        print_json(runtime.rotate_vault_key(new_password=args.new_password, current_password=args.password))
+        return 0
+
+    if args.command == "inspect-bundle":
+        print_json(runtime.inspect_secure_bundle(bundle_path=args.path, bundle_password=args.bundle_password))
+        return 0
+
+    if args.command == "export-bundle":
+        print_json(
+            runtime.export_secure_bundle(
+                bundle_path=args.path,
+                bundle_password=args.bundle_password,
+                plant_id=args.plant_id or None,
+            )
+        )
+        return 0
+
+    if args.command == "import-bundle":
+        print_json(
+            runtime.import_secure_bundle(
+                bundle_path=args.path,
+                bundle_password=args.bundle_password,
+                allow_duplicate=bool(args.allow_duplicate),
+            )
+        )
+        return 0
+
+    if args.command == "trust-transfer-source":
+        print_json(
+            runtime.trust_transfer_source(
+                sync_id=args.sync_id,
+                fingerprint=args.fingerprint,
+                alias=args.alias,
+                notes=args.notes,
+            )
+        )
+        return 0
+
+    if args.command == "list-trusted-transfer-sources":
+        print_json({"trusted_sources": runtime.list_trusted_transfer_sources()})
         return 0
 
     if args.command == "save-network-secrets":
