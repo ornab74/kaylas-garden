@@ -4115,8 +4115,6 @@ if ctk is not None:
             self.ipfs_daemon_auto_start_var = tk.StringVar(value="off")
             self.hive_enabled_var = tk.StringVar(value="off")
             self.hive_broadcast_var = tk.StringVar(value="off")
-            self._body_text_color = "#ECECEC"
-            self._muted_text_color = "#A9B7A8"
 
             self.title("Kayla's Garden Studio")
             self.geometry("1420x940")
@@ -4128,58 +4126,8 @@ if ctk is not None:
             self._build_tabs()
             self.refresh_all()
 
-        def _make_textbox(self, parent: Any, *, height: int = 220) -> Any:
-            box = ctk.CTkTextbox(parent, height=height, wrap="word")
-            try:
-                box.configure(border_width=1, border_color="#56616B", corner_radius=10)
-            except Exception:
-                pass
-            try:
-                box._textbox.configure(wrap="word", padx=12, pady=10, insertbackground="#F1F5F1")
-            except Exception:
-                pass
-            return box
-
-        def _make_section_intro(self, parent: Any, title: str, body: str, *, row: int = 0, column: int = 0, padx: Any = 18, pady: Any = (18, 10), wraplength: int = 760) -> None:
-            ctk.CTkLabel(parent, text=title, font=ctk.CTkFont(size=24, weight="bold")).grid(
-                row=row, column=column, padx=padx, pady=(pady[0], 4), sticky="w"
-            )
-            ctk.CTkLabel(
-                parent,
-                text=body,
-                wraplength=wraplength,
-                justify="left",
-                text_color=self._muted_text_color,
-            ).grid(row=row + 1, column=column, padx=padx, pady=(0, pady[1]), sticky="w")
-
-        def _make_hint(self, parent: Any, text: str, *, row: int, column: int = 0, padx: Any = 18, pady: Any = (0, 10), wraplength: int = 500) -> None:
-            ctk.CTkLabel(
-                parent,
-                text=text,
-                wraplength=wraplength,
-                justify="left",
-                text_color=self._muted_text_color,
-            ).grid(row=row, column=column, padx=padx, pady=pady, sticky="w")
-
-        def _make_info_card(self, parent: Any, title: str, body: str, *, row: int, column: int, padx: Any = 18, pady: Any = 18, height: int = 220) -> Any:
-            card = ctk.CTkFrame(parent)
-            card.grid(row=row, column=column, padx=padx, pady=pady, sticky="nsew")
-            card.grid_columnconfigure(0, weight=1)
-            card.grid_rowconfigure(1, weight=1)
-            ctk.CTkLabel(card, text=title, font=ctk.CTkFont(size=20, weight="bold")).grid(
-                row=0, column=0, padx=18, pady=(18, 10), sticky="w"
-            )
-            box = self._make_textbox(card, height=height)
-            box.grid(row=1, column=0, padx=18, pady=(0, 18), sticky="nsew")
-            self._set_text(box, body.strip())
-            try:
-                box.configure(state="disabled")
-            except Exception:
-                pass
-            return box
-
         def _build_sidebar(self) -> None:
-            sidebar = ctk.CTkFrame(self, width=305, corner_radius=0)
+            sidebar = ctk.CTkFrame(self, width=320, corner_radius=0)
             sidebar.grid(row=0, column=0, sticky="nsew")
             sidebar.grid_rowconfigure(99, weight=1)
 
@@ -4190,28 +4138,32 @@ if ctk is not None:
             ).grid(row=0, column=0, padx=20, pady=(24, 6), sticky="w")
             ctk.CTkLabel(
                 sidebar,
-                text="Local-first plant tagging, secure storage, IPFS, Hive checkpoints, and evidence-aware trust flows.",
-                wraplength=255,
+                text="Local-first plant tagging, secure storage, IPFS, Hive checkpoints, and evidence-aware trust workflows.",
+                wraplength=270,
                 justify="left",
                 text_color="#B7D7B0",
             ).grid(row=1, column=0, padx=20, pady=(0, 18), sticky="w")
 
-            self.identity_label = ctk.CTkLabel(sidebar, text="", wraplength=255, justify="left")
+            self.identity_label = ctk.CTkLabel(sidebar, text="", wraplength=270, justify="left")
             self.identity_label.grid(row=2, column=0, padx=20, pady=(0, 16), sticky="w")
 
             ctk.CTkButton(sidebar, text="Refresh", command=self.refresh_all).grid(row=3, column=0, padx=20, pady=6, sticky="ew")
-            ctk.CTkButton(sidebar, text="Bootstrap Repo Data", command=self.on_bootstrap).grid(row=4, column=0, padx=20, pady=6, sticky="ew")
-            ctk.CTkButton(sidebar, text="Verify LiteRT Model", command=self.on_verify_model).grid(row=5, column=0, padx=20, pady=6, sticky="ew")
-            ctk.CTkButton(sidebar, text="Download LiteRT Model", command=self.on_download_model).grid(row=6, column=0, padx=20, pady=6, sticky="ew")
-            ctk.CTkButton(sidebar, text="Run System Check", command=self.refresh_all).grid(row=7, column=0, padx=20, pady=6, sticky="ew")
+            ctk.CTkButton(sidebar, text="Start Here", command=lambda: self.tabs.set("Start Here")).grid(row=4, column=0, padx=20, pady=6, sticky="ew")
+            ctk.CTkButton(sidebar, text="Run System Check", command=self.refresh_all).grid(row=5, column=0, padx=20, pady=6, sticky="ew")
+            ctk.CTkButton(sidebar, text="Workflow Lab", command=lambda: self.tabs.set("Workflow")).grid(row=6, column=0, padx=20, pady=6, sticky="ew")
+            ctk.CTkButton(sidebar, text="Protocol Lab", command=lambda: self.tabs.set("Protocol Lab")).grid(row=7, column=0, padx=20, pady=6, sticky="ew")
+            ctk.CTkButton(sidebar, text="Validation Lab", command=lambda: self.tabs.set("Validation Lab")).grid(row=8, column=0, padx=20, pady=6, sticky="ew")
+            ctk.CTkButton(sidebar, text="Bootstrap Repo Data", command=self.on_bootstrap).grid(row=9, column=0, padx=20, pady=6, sticky="ew")
+            ctk.CTkButton(sidebar, text="Verify LiteRT Model", command=self.on_verify_model).grid(row=10, column=0, padx=20, pady=6, sticky="ew")
+            ctk.CTkButton(sidebar, text="Download LiteRT Model", command=self.on_download_model).grid(row=11, column=0, padx=20, pady=6, sticky="ew")
 
-            self.sidebar_metrics = self._make_textbox(sidebar, height=200)
-            self.sidebar_metrics.grid(row=8, column=0, padx=20, pady=(16, 10), sticky="nsew")
+            self.sidebar_metrics = self._make_textbox(sidebar, height=220)
+            self.sidebar_metrics.grid(row=12, column=0, padx=20, pady=(16, 10), sticky="nsew")
 
             ctk.CTkLabel(
                 sidebar,
                 textvariable=self.status_var,
-                wraplength=255,
+                wraplength=270,
                 justify="left",
                 text_color="#D6E8CF",
             ).grid(row=100, column=0, padx=20, pady=(12, 24), sticky="sw")
@@ -4226,14 +4178,18 @@ if ctk is not None:
                     segmented_button_selected_color="#3AB07B",
                     segmented_button_selected_hover_color="#46C78D",
                     segmented_button_unselected_hover_color="#5A5A5A",
-                    text_color=self._body_text_color,
                     corner_radius=12,
                 )
             except Exception:
                 pass
-            for tab_name in [
+            for name in [
                 "Start Here",
                 "System Check",
+                "Workflow",
+                "Protocol Lab",
+                "Validation Lab",
+                "Trust Lab",
+                "About",
                 "Dashboard",
                 "Plants",
                 "Observe",
@@ -4243,13 +4199,16 @@ if ctk is not None:
                 "Insights",
                 "Settings",
                 "Models",
-                "Trust Lab",
-                "About",
             ]:
-                self.tabs.add(tab_name)
+                self.tabs.add(name)
 
             self._build_start_tab(self.tabs.tab("Start Here"))
             self._build_system_check_tab(self.tabs.tab("System Check"))
+            self._build_workflow_tab(self.tabs.tab("Workflow"))
+            self._build_protocol_lab_tab(self.tabs.tab("Protocol Lab"))
+            self._build_validation_tab(self.tabs.tab("Validation Lab"))
+            self._build_trust_tab(self.tabs.tab("Trust Lab"))
+            self._build_about_tab(self.tabs.tab("About"))
             self._build_dashboard_tab(self.tabs.tab("Dashboard"))
             self._build_plants_tab(self.tabs.tab("Plants"))
             self._build_observe_tab(self.tabs.tab("Observe"))
@@ -4259,126 +4218,185 @@ if ctk is not None:
             self._build_insights_tab(self.tabs.tab("Insights"))
             self._build_network_tab(self.tabs.tab("Settings"))
             self._build_models_tab(self.tabs.tab("Models"))
-            self._build_trust_tab(self.tabs.tab("Trust Lab"))
-            self._build_about_tab(self.tabs.tab("About"))
             self.tabs.set("Start Here")
 
-        def _build_start_tab(self, tab: Any) -> None:
-            tab.grid_columnconfigure(0, weight=2)
-            tab.grid_columnconfigure(1, weight=3)
-            tab.grid_rowconfigure(2, weight=1)
+        def _make_textbox(self, parent: Any, **kwargs: Any) -> Any:
+            textbox = ctk.CTkTextbox(parent, **kwargs)
+            try:
+                textbox.configure(border_width=1, border_color="#4F4F4F", corner_radius=12)
+            except Exception:
+                pass
+            inner = getattr(textbox, "_textbox", None)
+            if inner is not None:
+                try:
+                    inner.configure(wrap="word", padx=10, pady=10, spacing1=2, spacing3=2)
+                except Exception:
+                    pass
+            return textbox
 
+        def _make_info_card(self, parent: Any, title: str, text: str, *, row: int, column: int, padx: Any, pady: Any, height: int = 260) -> Any:
+            frame = ctk.CTkFrame(parent)
+            frame.grid(row=row, column=column, padx=padx, pady=pady, sticky="nsew")
+            frame.grid_columnconfigure(0, weight=1)
+            frame.grid_rowconfigure(1, weight=1)
+            ctk.CTkLabel(frame, text=title, font=ctk.CTkFont(size=20, weight="bold")).grid(row=0, column=0, padx=18, pady=(18, 10), sticky="w")
+            box = self._make_textbox(frame, height=height)
+            box.grid(row=1, column=0, padx=18, pady=(0, 18), sticky="nsew")
+            self._set_text(box, text.strip())
+            try:
+                box.configure(state="disabled")
+            except Exception:
+                pass
+            return box
+
+        def _make_section_intro(self, parent: Any, title: str, text: str, *, row: int, column: int, padx: Any, pady: Any, wraplength: int = 900) -> None:
+            frame = ctk.CTkFrame(parent)
+            frame.grid(row=row, column=column, columnspan=2, padx=padx, pady=pady, sticky="ew")
+            frame.grid_columnconfigure(0, weight=1)
+            ctk.CTkLabel(frame, text=title, font=ctk.CTkFont(size=24, weight="bold")).grid(row=0, column=0, padx=18, pady=(16, 6), sticky="w")
+            ctk.CTkLabel(frame, text=text, wraplength=wraplength, justify="left", text_color="#CFE7C8").grid(row=1, column=0, padx=18, pady=(0, 16), sticky="w")
+
+        def _build_start_tab(self, tab: Any) -> None:
+            tab.grid_columnconfigure(0, weight=3)
+            tab.grid_columnconfigure(1, weight=2)
+            tab.grid_rowconfigure(1, weight=1)
             self._make_section_intro(
                 tab,
                 "First Start Flow",
-                "Use this screen as the day-one checklist for local setup, Hive linking, and trust-safe publishing.",
+                "Use this screen as the day-one checklist for local setup, Hive linking, trusted publishing, and recovery planning.",
                 row=0,
                 column=0,
                 padx=18,
                 pady=(18, 12),
-                wraplength=900,
             )
-
-            left = ctk.CTkFrame(tab)
-            left.grid(row=2, column=0, padx=18, pady=(0, 18), sticky="nsew")
-            left.grid_columnconfigure(0, weight=1)
-            left.grid_rowconfigure(1, weight=1)
-            ctk.CTkLabel(left, text="Setup Flow", font=ctk.CTkFont(size=20, weight="bold")).grid(
-                row=0, column=0, padx=18, pady=(18, 10), sticky="w"
-            )
-            self.start_guide_text = self._make_textbox(left, height=520)
-            self.start_guide_text.grid(row=1, column=0, padx=18, pady=(0, 18), sticky="nsew")
-            self._set_text(self.start_guide_text, self._generate_start_flow_text())
-            try:
-                self.start_guide_text.configure(state="disabled")
-            except Exception:
-                pass
-
+            self.start_guide_text = self._make_info_card(tab, "Setup Flow", self._generate_start_flow_text(), row=1, column=0, padx=18, pady=(0, 18), height=520)
             right = ctk.CTkFrame(tab)
-            right.grid(row=2, column=1, padx=(0, 18), pady=(0, 18), sticky="nsew")
+            right.grid(row=1, column=1, padx=(0, 18), pady=(0, 18), sticky="nsew")
             right.grid_columnconfigure(0, weight=1)
             right.grid_rowconfigure(1, weight=1)
             right.grid_rowconfigure(3, weight=1)
-
-            ctk.CTkLabel(right, text="Hive Linking Notes", font=ctk.CTkFont(size=20, weight="bold")).grid(
-                row=0, column=0, padx=18, pady=(18, 10), sticky="w"
-            )
-            self.start_hive_text = self._make_textbox(right, height=240)
+            ctk.CTkLabel(right, text="Hive Linking Notes", font=ctk.CTkFont(size=20, weight="bold")).grid(row=0, column=0, padx=18, pady=(18, 10), sticky="w")
+            self.start_hive_text = self._make_textbox(right, height=250)
             self.start_hive_text.grid(row=1, column=0, padx=18, pady=(0, 18), sticky="nsew")
-            self._set_text(self.start_hive_text, self._generate_hive_notes_text())
-            try:
-                self.start_hive_text.configure(state="disabled")
-            except Exception:
-                pass
-
-            ctk.CTkLabel(right, text="Recommended Next Build", font=ctk.CTkFont(size=20, weight="bold")).grid(
-                row=2, column=0, padx=18, pady=(0, 10), sticky="w"
-            )
-            self.start_next_steps_text = self._make_textbox(right, height=220)
-            self.start_next_steps_text.grid(row=3, column=0, padx=18, pady=(0, 18), sticky="nsew")
-            self._set_text(self.start_next_steps_text, self._generate_next_steps_text())
-            try:
-                self.start_next_steps_text.configure(state="disabled")
-            except Exception:
-                pass
+            ctk.CTkLabel(right, text="Quick Actions", font=ctk.CTkFont(size=20, weight="bold")).grid(row=2, column=0, padx=18, pady=(0, 10), sticky="w")
+            quick = ctk.CTkFrame(right, fg_color="transparent")
+            quick.grid(row=3, column=0, padx=18, pady=(0, 12), sticky="new")
+            for i in range(2):
+                quick.grid_columnconfigure(i, weight=1)
+            ctk.CTkButton(quick, text="Open Settings", command=lambda: self.tabs.set("Settings")).grid(row=0, column=0, padx=(0, 8), pady=(0, 8), sticky="ew")
+            ctk.CTkButton(quick, text="Open Trust Lab", command=lambda: self.tabs.set("Trust Lab")).grid(row=0, column=1, padx=(8, 0), pady=(0, 8), sticky="ew")
+            ctk.CTkButton(quick, text="Run System Check", command=self.refresh_all).grid(row=1, column=0, padx=(0, 8), pady=(0, 8), sticky="ew")
+            ctk.CTkButton(quick, text="Open Workflow", command=lambda: self.tabs.set("Workflow")).grid(row=1, column=1, padx=(8, 0), pady=(0, 8), sticky="ew")
+            ctk.CTkButton(quick, text="Open Protocol Lab", command=lambda: self.tabs.set("Protocol Lab")).grid(row=2, column=0, padx=(0, 8), pady=(0, 8), sticky="ew")
+            ctk.CTkButton(quick, text="Open Dashboard", command=lambda: self.tabs.set("Dashboard")).grid(row=2, column=1, padx=(8, 0), pady=(0, 8), sticky="ew")
+            self.start_next_steps_text = self._make_textbox(right, height=180)
+            self.start_next_steps_text.grid(row=4, column=0, padx=18, pady=(0, 18), sticky="nsew")
 
         def _build_system_check_tab(self, tab: Any) -> None:
             tab.grid_columnconfigure(0, weight=3)
             tab.grid_columnconfigure(1, weight=2)
-            tab.grid_rowconfigure(2, weight=1)
-
+            tab.grid_rowconfigure(1, weight=1)
             self._make_section_intro(
                 tab,
-                "Readiness + Safety Check",
-                "This screen condenses the runtime into a practical go/no-go report before you publish, sync, or link external identities.",
+                "System Check",
+                "A practical readiness report for identity, networking, model availability, queue pressure, and trust-surface safety.",
                 row=0,
                 column=0,
                 padx=18,
                 pady=(18, 12),
-                wraplength=900,
             )
-            ctk.CTkButton(tab, text="Refresh Checks", command=self.refresh_all).grid(row=1, column=0, padx=18, pady=(0, 12), sticky="w")
-
-            self.system_check_text = self._make_textbox(tab, height=540)
-            self.system_check_text.grid(row=2, column=0, padx=18, pady=(0, 18), sticky="nsew")
-
+            self.system_check_text = self._make_textbox(tab, height=520)
+            self.system_check_text.grid(row=1, column=0, padx=18, pady=(0, 18), sticky="nsew")
             side = ctk.CTkFrame(tab)
-            side.grid(row=2, column=1, padx=(0, 18), pady=(0, 18), sticky="nsew")
+            side.grid(row=1, column=1, padx=(0, 18), pady=(0, 18), sticky="nsew")
             side.grid_columnconfigure(0, weight=1)
             side.grid_rowconfigure(1, weight=1)
             side.grid_rowconfigure(3, weight=1)
-            ctk.CTkLabel(side, text="Concept Status", font=ctk.CTkFont(size=20, weight="bold")).grid(row=0, column=0, padx=18, pady=(18, 10), sticky="w")
-            self.system_concept_text = self._make_textbox(side, height=220)
-            self.system_concept_text.grid(row=1, column=0, padx=18, pady=(0, 18), sticky="nsew")
-            ctk.CTkLabel(side, text="Audit Surface", font=ctk.CTkFont(size=20, weight="bold")).grid(row=2, column=0, padx=18, pady=(0, 10), sticky="w")
-            self.system_audit_text = self._make_textbox(side, height=220)
-            self.system_audit_text.grid(row=3, column=0, padx=18, pady=(0, 18), sticky="nsew")
-            self._set_text(self.system_audit_text, self._generate_audit_surface_text())
-            try:
-                self.system_audit_text.configure(state="disabled")
-            except Exception:
-                pass
+            ctk.CTkLabel(side, text="Protocol Readiness", font=ctk.CTkFont(size=20, weight="bold")).grid(row=0, column=0, padx=18, pady=(18, 10), sticky="w")
+            self.protocol_readiness_text = self._make_textbox(side, height=220)
+            self.protocol_readiness_text.grid(row=1, column=0, padx=18, pady=(0, 18), sticky="nsew")
+            ctk.CTkLabel(side, text="Risk Review Surface", font=ctk.CTkFont(size=20, weight="bold")).grid(row=2, column=0, padx=18, pady=(0, 10), sticky="w")
+            self.audit_surface_text = self._make_textbox(side, height=220)
+            self.audit_surface_text.grid(row=3, column=0, padx=18, pady=(0, 18), sticky="nsew")
 
-        def _build_trust_tab(self, tab: Any) -> None:
+        def _build_workflow_tab(self, tab: Any) -> None:
             tab.grid_columnconfigure(0, weight=1)
             tab.grid_columnconfigure(1, weight=1)
             tab.grid_rowconfigure(1, weight=1)
             tab.grid_rowconfigure(2, weight=1)
-
             self._make_section_intro(
                 tab,
-                "Trust Lab",
-                "Design the community layer around evidence, reversibility, and auditor performance rather than pure economic weight.",
+                "Workflow Lab",
+                "Turn the concept into repeatable steps: create a claim, attach evidence, request review, resolve disputes, and keep a reversible history.",
                 row=0,
                 column=0,
                 padx=18,
                 pady=(18, 12),
                 wraplength=980,
             )
+            self.workflow_claims_text = self._make_info_card(tab, "Claim Objects", self._generate_claim_objects_text(), row=1, column=0, padx=18, pady=(0, 18), height=280)
+            self.workflow_review_text = self._make_info_card(tab, "Reviewer Queue", self._generate_reviewer_queue_text(), row=1, column=1, padx=(0, 18), pady=(0, 18), height=280)
+            self.workflow_lifecycle_text = self._make_info_card(tab, "State Machine", self._generate_state_machine_text(), row=2, column=0, padx=18, pady=(0, 18), height=280)
+            self.workflow_bootstrap_text = self._make_info_card(tab, "Bootstrap Path", self._generate_bootstrap_path_text(), row=2, column=1, padx=(0, 18), pady=(0, 18), height=280)
 
-            self.trust_identity_text = self._make_info_card(tab, "Source Origin + Linking", self._generate_linking_flow_text(), row=1, column=0, padx=18, pady=(0, 18), height=280)
-            self.trust_stake_text = self._make_info_card(tab, "Information Stake", self._generate_information_stake_text(), row=1, column=1, padx=(0, 18), pady=(0, 18), height=280)
-            self.trust_governance_text = self._make_info_card(tab, "Governance + Voting Surface", self._generate_governance_surface_text(), row=2, column=0, padx=18, pady=(0, 18), height=280)
+        def _build_protocol_lab_tab(self, tab: Any) -> None:
+            tab.grid_columnconfigure(0, weight=1)
+            tab.grid_columnconfigure(1, weight=1)
+            tab.grid_rowconfigure(1, weight=1)
+            tab.grid_rowconfigure(2, weight=1)
+            self._make_section_intro(
+                tab,
+                "Protocol Lab",
+                "Shape the protocol rules before hard-coding them: define claim payloads, privacy-aware location proofs, reviewer weighting, and recovery paths.",
+                row=0,
+                column=0,
+                padx=18,
+                pady=(18, 12),
+                wraplength=980,
+            )
+            self.protocol_schema_text = self._make_info_card(tab, "Claim + Evidence Schema", self._generate_protocol_schema_text(), row=1, column=0, padx=18, pady=(0, 18), height=280)
+            self.protocol_location_text = self._make_info_card(tab, "Location + Link Validation", self._generate_location_validation_text(), row=1, column=1, padx=(0, 18), pady=(0, 18), height=280)
+            self.protocol_review_text = self._make_info_card(tab, "Reviewer Weighting", self._generate_reviewer_weight_text(), row=2, column=0, padx=18, pady=(0, 18), height=280)
+            self.protocol_recovery_text = self._make_info_card(tab, "Recovery + Safety", self._generate_recovery_safety_text(), row=2, column=1, padx=(0, 18), pady=(0, 18), height=280)
+
+        def _build_validation_tab(self, tab: Any) -> None:
+            tab.grid_columnconfigure(0, weight=1)
+            tab.grid_columnconfigure(1, weight=1)
+            tab.grid_rowconfigure(1, weight=1)
+            tab.grid_rowconfigure(2, weight=1)
+            self._make_section_intro(
+                tab,
+                "Validation Lab",
+                "Move from loose ideas to a concrete review protocol: challenge-based identity linking, evidence-weighted consensus, and risk-simulation assisted auditing.",
+                row=0,
+                column=0,
+                padx=18,
+                pady=(18, 12),
+                wraplength=980,
+            )
+            self.validation_pipeline_text = self._make_info_card(tab, "Validation Pipeline", self._generate_validation_pipeline_text(), row=1, column=0, padx=18, pady=(0, 18), height=280)
+            self.validation_consensus_text = self._make_info_card(tab, "Consensus Ladder", self._generate_consensus_ladder_text(), row=1, column=1, padx=(0, 18), pady=(0, 18), height=280)
+            self.validation_risk_text = self._make_info_card(tab, "Risk Simulation", self._generate_risk_simulation_text(), row=2, column=0, padx=18, pady=(0, 18), height=280)
+            self.validation_registry_text = self._make_info_card(tab, "Registry + Council", self._generate_registry_design_text(), row=2, column=1, padx=(0, 18), pady=(0, 18), height=280)
+
+        def _build_trust_tab(self, tab: Any) -> None:
+            tab.grid_columnconfigure(0, weight=1)
+            tab.grid_columnconfigure(1, weight=1)
+            tab.grid_rowconfigure(1, weight=1)
+            tab.grid_rowconfigure(2, weight=1)
+            self._make_section_intro(
+                tab,
+                "Trust Lab",
+                "Design the public layer around evidence quality, accepted corrections, and auditor performance instead of raw economic stake.",
+                row=0,
+                column=0,
+                padx=18,
+                pady=(18, 12),
+                wraplength=980,
+            )
+            self.trust_link_text = self._make_info_card(tab, "Source Origin + Linking", self._generate_linking_flow_text(), row=1, column=0, padx=18, pady=(0, 18), height=280)
+            self.trust_info_text = self._make_info_card(tab, "Information Stake", self._generate_information_stake_text(), row=1, column=1, padx=(0, 18), pady=(0, 18), height=280)
+            self.trust_vote_text = self._make_info_card(tab, "Voting Surface", self._generate_governance_surface_text(), row=2, column=0, padx=18, pady=(0, 18), height=280)
             self.trust_roadmap_text = self._make_info_card(tab, "Roadmap", self._generate_trust_roadmap_text(), row=2, column=1, padx=(0, 18), pady=(0, 18), height=280)
 
         def _build_about_tab(self, tab: Any) -> None:
@@ -4386,7 +4404,6 @@ if ctk is not None:
             tab.grid_columnconfigure(1, weight=1)
             tab.grid_rowconfigure(1, weight=1)
             tab.grid_rowconfigure(2, weight=1)
-
             self._make_section_intro(
                 tab,
                 "About Kayla's Garden",
@@ -4399,37 +4416,45 @@ if ctk is not None:
             )
             self._make_info_card(tab, "Architecture", self._generate_architecture_text(), row=1, column=0, padx=18, pady=(0, 18), height=260)
             self._make_info_card(tab, "Principles", self._generate_principles_text(), row=1, column=1, padx=(0, 18), pady=(0, 18), height=260)
-            self._make_info_card(tab, "Safer Validation Model", self._generate_validation_model_text(), row=2, column=0, padx=18, pady=(0, 18), height=260)
-            self._make_info_card(tab, "Next Concept Steps", self._generate_next_steps_text(), row=2, column=1, padx=(0, 18), pady=(0, 18), height=260)
+            self._make_info_card(tab, "Validation Model", self._generate_validation_model_text(), row=2, column=0, padx=18, pady=(0, 18), height=260)
+            self._make_info_card(tab, "Next Build Targets", self._generate_next_steps_text(), row=2, column=1, padx=(0, 18), pady=(0, 18), height=260)
 
         def _generate_start_flow_text(self) -> str:
             return """
-1. Refresh the runtime and inspect identity health.
-- Confirm SyncID, fingerprint, and device label are visible.
-- Keep network mode local-first until the local loop feels stable.
+1. Refresh the runtime and confirm identity health.
+- Check SyncID, fingerprint, and device label.
+- Keep the system local-first until the local loop feels stable.
 
-2. Configure garden settings.
-- Add a location only if you want location-aware summaries.
-- Set IPFS and Hive values only when you actually intend to bridge outward.
-
-3. Prepare storage and model surfaces.
-- Verify the LiteRT model before relying on guide or diagnosis workflows.
-- Use managed IPFS only after checking where the repo path and binary path point.
-
-4. Create your first plant passport and first observation.
-- Start private.
-- Publish a note and image to LeafVault.
-- Review the resulting JSON before wider sharing.
-
-5. Link Hive intentionally.
-- Use a personal account, not a repo secret.
-- Prove account ownership with a signed challenge or on-chain memo.
+2. Configure settings intentionally.
+- Add IPFS and Hive only when you truly want network reach.
 - Store credentials only in the encrypted vault.
 
+3. Verify your model and storage paths.
+- Confirm LiteRT is present before using guidance or diagnosis flows.
+- Check daemon binary and repo paths before enabling managed IPFS.
+
+4. Create the first plant passport and observation.
+- Start private.
+- Review the JSON output before publishing outward.
+
+5. Link Hive with a proof flow.
+- Generate a local keypair.
+- Publish or sign a challenge from Hive.
+- Record the linkage with a reversible timestamped entry.
+
 6. Expand into trust workflows.
-- Add peers.
-- Create small private groups.
-- Test attestation, correction, and audit flows before public voting.
+- Test attest, dispute, and correction paths in a small group before public rollout.
+""".strip()
+
+        def _generate_next_steps_text(self) -> str:
+            return """
+Recommended next build targets:
+- claim editor with evidence bundle attachment
+- reviewer queue with reasons and risk flags
+- location/link validation cards
+- reversible state transitions for accept/dispute/supersede
+- public source-origin schema registry
+- signed export/restore bundle for device migration
 """.strip()
 
         def _generate_hive_notes_text(self) -> str:
@@ -4447,17 +4472,6 @@ Recommended linking proof:
 Safer default:
 - Keep a public source-origin account for schemas, announcements, and compatibility notices.
 - Never ship a private origin account key in the repo.
-""".strip()
-
-        def _generate_next_steps_text(self) -> str:
-            return """
-Near-term build targets:
-- guided settings tooltips across every network field
-- visual queue health chips for anchor and sync backlog
-- claim object schema for species/location/link attestations
-- trust ledger for accepted corrections, disputes, and reversals
-- auditor review queue with evidence bundles and risk flags
-- signed export bundle for cross-device restore and verification
 """.strip()
 
         def _generate_linking_flow_text(self) -> str:
@@ -4487,7 +4501,7 @@ Possible inputs:
 - evidence completeness
 - long-term consistency
 
-That makes influence earned from reliable contributions, not only economic weight.
+Influence is earned from reliable contributions, not only economic weight.
 """.strip()
 
         def _generate_governance_surface_text(self) -> str:
@@ -4505,6 +4519,82 @@ Suggested rules:
 - disputed claims stay visible with state markers
 - auditors are scored by later outcomes, not title alone
 """.strip()
+
+        def _generate_protocol_schema_text(self) -> str:
+            return """
+Protocol schema ideas:
+- claim header: id, revision, author, scope, visibility, created_at
+- subject block: plant, observation, source_link, place_tag, technique
+- evidence block: local refs, content hash, capture method, witness notes
+- review block: requested reviewers, risk band, status, rationale trail
+- settlement block: attested, disputed, superseded, withdrawn, archived
+
+Keep public payloads compact and privacy-safe while local records stay richer.
+""".strip()
+
+        def _generate_location_validation_text(self) -> str:
+            return """
+Location and link validation:
+- use coarse region proofs by default, not exact coordinates
+- separate 'observed here' from 'reported from this source'
+- require evidence for source links so dead or spoofed references can be challenged
+- allow multiple validators to confirm a place tag without exposing home-scale precision
+- mark sensitive habitats and private gardens as blur-only zones
+""".strip()
+
+        def _generate_reviewer_weight_text(self) -> str:
+            return """
+Reviewer weighting ideas:
+- score accepted reviews higher when later evidence agrees
+- reduce weight for fast unsupported approvals
+- reward precise corrections more than broad agreement spam
+- require diversity across devices, regions, and reviewer histories
+- add cool-downs when the same cluster validates each other too often
+
+This pushes the network toward evidence diversity instead of popularity loops.
+""".strip()
+
+        def _generate_recovery_safety_text(self) -> str:
+            return """
+Recovery and safety:
+- every account link should be removable and re-provable
+- device migration should export signed local state plus encrypted secrets separately
+- suspicious bursts of new claims should enter slow-review mode
+- high-risk claims should never bypass human-readable audit notes
+- public checkpoints should point to reversible local history, not overwrite it
+""".strip()
+
+        def _generate_protocol_readout_text(self) -> str:
+            summary = self.runtime.summary()
+            public_ready = []
+            if (self.runtime.settings.get("hive_api") or "").strip():
+                public_ready.append("Hive API configured")
+            if (self.runtime.settings.get("ipfs_api") or "").strip():
+                public_ready.append("IPFS API configured")
+            if summary.get("model_status", {}).get("installed"):
+                public_ready.append("LiteRT model available")
+            if not public_ready:
+                public_ready.append("Local-first only")
+        def _generate_protocol_readout_text(self) -> str:
+            summary = self.runtime.summary()
+            public_ready = []
+            if (self.runtime.settings.get("hive_api") or "").strip():
+                public_ready.append("Hive API configured")
+            if (self.runtime.settings.get("ipfs_api") or "").strip():
+                public_ready.append("IPFS API configured")
+            if summary.get("model_status", {}).get("installed"):
+                public_ready.append("LiteRT model available")
+            if not public_ready:
+                public_ready.append("Local-first only")
+            milestone = "small-group review" if summary.get("plants") else "create first plant passport"
+            return (
+                "Protocol readout:\n"
+                f"- Identity present: {bool(getattr(self.runtime, 'identity', None))}\n"
+                f"- Public surfaces enabled: {', '.join(public_ready)}\n"
+                f"- Anchor queue depth: {summary.get('anchor_queue_depth')}\n"
+                f"- Sync queue depth: {summary.get('sync_queue_depth')}\n"
+                f"- Recommended next milestone: {milestone}"
+            )
 
         def _generate_trust_roadmap_text(self) -> str:
             return """
@@ -4547,111 +4637,192 @@ Safer validation model:
 - peers can attest, extend, dispute, or supersede
 - reputation rises from accepted high-quality work
 - auditor weight changes with downstream accuracy
-- anomaly and consistency scoring highlights risky claims for review
+- anomaly and consistency scoring highlight risky claims for review
 """.strip()
+
+        def _generate_claim_objects_text(self) -> str:
+            return """
+Suggested claim object:
+- claim_id
+- subject_type: plant, observation, location, source_link, technique
+- subject_ref
+- claim_type
+- author_sync_id
+- evidence_refs
+- confidence_note
+- created_at / supersedes / superseded_by
+- current_state
+
+Every public action should point back to one of these objects.
+""".strip()
+
+        def _generate_reviewer_queue_text(self) -> str:
+            return """
+Reviewer queue fields:
+- priority
+- risk band
+- evidence completeness
+- prior disputes
+- geographic sensitivity
+- validator diversity target
+- required review count
+
+Queue design should route easy claims fast and slow down high-risk ones.
+""".strip()
+
+        def _generate_state_machine_text(self) -> str:
+            return """
+Suggested lifecycle:
+- draft
+- published_private
+- shared_for_review
+- attested
+- disputed
+- superseded
+- archived
+
+State changes should be reversible, signed, and visible in history.
+""".strip()
+
+        def _generate_bootstrap_path_text(self) -> str:
+            return """
+Bootstrap phases:
+1. local-only plants and observations
+2. private small-group review
+3. invite trusted auditors
+4. add source-origin schemas and checkpoints
+5. open public validation surfaces for low-risk claims first
+6. expand to location and link attestations after review data exists
+""".strip()
+
+        def _generate_system_check_report(self) -> str:
+            summary = self.runtime.summary()
+            model = summary.get("model_status") or {}
+            network = summary.get("network_status") or {}
+            mode = network.get("mode") or {}
+            daemon = network.get("ipfs_daemon") or {}
+            checks = [
+                ("Identity", bool(getattr(self.runtime, "identity", None))),
+                ("Local-first mode", mode.get("network_mode") == "local-first"),
+                ("Cloud mode ready", bool(mode.get("cloud_mode"))),
+                ("IPFS API set", bool((self.runtime.settings.get("ipfs_api") or "").strip())),
+                ("Hive API set", bool((self.runtime.settings.get("hive_api") or "").strip())),
+                ("LiteRT runtime", bool(model.get("litert_installed"))),
+                ("Primary model", bool(model.get("installed"))),
+                ("Managed IPFS binary", bool((self.runtime.settings.get("ipfs_daemon_binary") or "").strip())),
+            ]
+            lines = ["Readiness report:"]
+            for label, passed in checks:
+                lines.append(f"- {'OK' if passed else 'Needs work'}: {label}")
+            lines.extend([
+                "",
+                f"Anchor queue depth: {summary.get('anchor_queue_depth')}",
+                f"Sync queue depth: {summary.get('sync_queue_depth')}",
+                f"IPFS daemon running: {daemon.get('running')}",
+                f"Network mode: {mode.get('network_mode')}",
+                f"Plants tracked: {len(summary.get('plants') or [])}",
+            ])
+            return "\n".join(lines)
+
+        def _generate_protocol_readiness_text(self) -> str:
+            summary = self.runtime.summary()
+            possible = 6
+            score = self._protocol_readiness_score(summary)
+            return (
+                f"Protocol readiness score: {score}/{possible}\n\n"
+                "Suggested interpretation:\n"
+                "- 0-2: establish local loop first\n"
+                "- 3-4: safe for limited review workflows\n"
+                "- 5-6: ready for structured trust experiments"
+            )
 
         def _generate_audit_surface_text(self) -> str:
             return """
-Audit surface ideas:
-- show risk buckets for identity, model, IPFS, Hive, and queue backlog
-- mark claims missing evidence, signatures, or reviewer diversity
-- keep a reversal timeline so bad approvals lower trust
-- let auditors attach structured reasons instead of freeform only
+Audit surface design:
+- auditors review evidence bundles, not just labels
+- risk scoring can combine reversals, conflicts, and missing fields
+- higher-risk claims require broader validator diversity
+- accepted corrections should raise both author and reviewer trust
+- repeated weak approvals should reduce reviewer weight over time
 """.strip()
 
-        def _generate_system_check_text(self, summary: Dict[str, Any]) -> str:
-            mode = summary["network_status"]["mode"]
-            daemon = summary["network_status"]["ipfs_daemon"]
-            model = summary["model_status"]
-            issues = []
-            if not self.runtime.identity.sync_id:
-                issues.append("Identity not initialized")
-            if not model.get("installed"):
-                issues.append("Primary LiteRT model missing")
-            if mode.get("cloud_mode") and not summary["network_status"]["ipfs"].get("httpx_available"):
-                issues.append("Cloud mode requested but HTTP transport is not ready")
-            if summary["sync_queue_depth"] > 25:
-                issues.append("Sync queue is growing")
-            if summary["anchor_queue_depth"] > 25:
-                issues.append("Anchor queue is growing")
-            issue_lines = "\n".join(f"- {item}" for item in issues) if issues else "- No immediate blockers detected"
-            return f"""
-Identity
-- SyncID: {self.runtime.identity.sync_id}
-- Fingerprint: {self.runtime.identity.fingerprint}
-- Device: {self.runtime.identity.device_label}
+        def _generate_validation_pipeline_text(self) -> str:
+            return """
+Suggested validation pipeline:
+1. author creates a claim draft locally
+2. app packages evidence refs, hashes, timestamps, and privacy mode
+3. claim gets an initial risk band from completeness + conflict checks
+4. challenge is routed to reviewers matched by topic and conflict distance
+5. reviewers attest, dispute, or request clarification with structured reasons
+6. the app records settlement, supersession links, and audit outcomes
 
-Runtime posture
-- Network mode: {mode.get('network_mode')}
-- Local-first only: {mode.get('local_first_only')}
-- Cloud mode: {mode.get('cloud_mode')}
-- IPFS enabled: {mode.get('ipfs_enabled')}
-- Hive enabled: {mode.get('hive_enabled')}
-
-Model + transport
-- LiteRT installed: {model.get('litert_installed')}
-- Model present: {model.get('installed')}
-- Crypto available: {model.get('crypto_available')}
-- HTTPX available: {model.get('httpx_available')}
-- OQS available: {model.get('oqs_available')}
-
-Daemon
-- Managed IPFS binary exists: {daemon.get('binary_exists')}
-- Repo initialized: {daemon.get('repo_initialized')}
-- Running: {daemon.get('running')}
-
-Queues
-- Anchor queue depth: {summary['anchor_queue_depth']}
-- Sync queue depth: {summary['sync_queue_depth']}
-- Plant count: {len(summary['plants'])}
-- Diagnosis count: {summary['diagnosis_count']}
-- Health check-ins: {summary['health_checkin_count']}
-
-Attention
-{issue_lines}
+Every step should stay reversible and leave a clear reasoning trail.
 """.strip()
 
-        def _generate_concept_status_text(self, summary: Dict[str, Any]) -> str:
-            community = summary.get('community_summary') or {}
-            return f"""
-Concept maturity snapshot
-- Plants tracked: {len(summary['plants'])}
-- Peer users: {community.get('peer_count', 0)}
-- Pin groups: {community.get('group_count', 0)}
-- Shared techniques: {summary.get('shared_technique_count', 0)}
+        def _generate_consensus_ladder_text(self) -> str:
+            return """
+Consensus ladder:
+- draft: private author workspace only
+- proposed: ready for review, waiting for first attestations
+- corroborated: enough aligned evidence from independent reviewers
+- challenged: conflict detected, additional review required
+- stabilized: claim survived time window and follow-up checks
+- superseded: replaced by a better evidenced revision
 
-What is ready now
-- local-first records
-- observations and plant passports
-- optional IPFS and Hive settings
-- community surfaces for early experiments
+This keeps uncertainty visible instead of pretending everything is final.
+""".strip()
 
-What should evolve next
-- evidence-native trust ledger
-- claim review states
-- account linking proofs
-- auditor performance metrics
+        def _generate_risk_simulation_text(self) -> str:
+            return """
+Risk simulation ideas:
+- simulate missing evidence, collusion, stale observations, and replayed links
+- increase review depth when the scenario score rises
+- compare expected harm of false acceptance vs false rejection
+- weight locality, recency, reviewer diversity, and reversal history
+- treat "quantum risk simulation" as a future analysis layer, not a trust source by itself
+
+The simulation should advise reviewers, not silently replace them.
+""".strip()
+
+        def _generate_registry_design_text(self) -> str:
+            return """
+Registry + council design:
+- source-origin Hive account publishes schemas and compatibility checkpoints
+- local gardens bind themselves through signed challenge responses
+- registry entries point to public keys, policy versions, and revoked states
+- a rotating audit council reviews disputed high-impact claims
+- council influence should decay unless its decisions continue to age well
+
+That creates governance with accountability, without defaulting to money-weighted control.
 """.strip()
 
         def _build_dashboard_tab(self, tab: Any) -> None:
             tab.grid_columnconfigure(0, weight=3)
             tab.grid_columnconfigure(1, weight=2)
-            tab.grid_rowconfigure(2, weight=1)
+            tab.grid_rowconfigure(1, weight=1)
 
-            self._make_section_intro(tab, "Garden Overview", "A high-level runtime summary of identity, records, network posture, and model readiness.", row=0, column=0, padx=18, pady=(18, 10), wraplength=820)
-            self.dashboard_summary = self._make_textbox(tab)
-            self.dashboard_summary.grid(row=2, column=0, padx=18, pady=(0, 18), sticky="nsew")
+            ctk.CTkLabel(tab, text="Garden Overview", font=ctk.CTkFont(size=24, weight="bold")).grid(
+                row=0, column=0, padx=18, pady=(18, 8), sticky="w"
+            )
+            self.dashboard_summary = self._make_textbox(tab, height=520)
+            self.dashboard_summary.grid(row=1, column=0, padx=18, pady=(0, 18), sticky="nsew")
 
             right = ctk.CTkFrame(tab)
-            right.grid(row=2, column=1, padx=(0, 18), pady=(0, 18), sticky="nsew")
+            right.grid(row=1, column=1, padx=(0, 18), pady=(0, 18), sticky="nsew")
             right.grid_rowconfigure(1, weight=1)
+            right.grid_rowconfigure(3, weight=1)
             right.grid_columnconfigure(0, weight=1)
 
             ctk.CTkLabel(right, text="Anchor + Sync Queue", font=ctk.CTkFont(size=18, weight="bold")).grid(
                 row=0, column=0, padx=18, pady=(18, 10), sticky="w"
             )
-            self.dashboard_queue = self._make_textbox(right)
+            self.dashboard_queue = self._make_textbox(right, height=220)
             self.dashboard_queue.grid(row=1, column=0, padx=18, pady=(0, 18), sticky="nsew")
+            ctk.CTkLabel(right, text="Protocol Readout", font=ctk.CTkFont(size=18, weight="bold")).grid(
+                row=2, column=0, padx=18, pady=(0, 10), sticky="w"
+            )
+            self.dashboard_protocol = self._make_textbox(right, height=220)
+            self.dashboard_protocol.grid(row=3, column=0, padx=18, pady=(0, 18), sticky="nsew")
 
         def _build_plants_tab(self, tab: Any) -> None:
             tab.grid_columnconfigure(0, weight=2)
@@ -4672,7 +4843,7 @@ What should evolve next
             self.plant_species_entry.grid(row=2, column=0, padx=18, pady=6, sticky="ew")
             self.plant_zone_entry = ctk.CTkEntry(form, placeholder_text="Hardiness zone")
             self.plant_zone_entry.grid(row=3, column=0, padx=18, pady=6, sticky="ew")
-            self.plant_notes_box = self._make_textbox(form, height=140)
+            self.plant_notes_box = ctk.CTkTextbox(form, height=140)
             self.plant_notes_box.grid(row=4, column=0, padx=18, pady=6, sticky="ew")
             self.plant_notes_box.insert("1.0", "Plant notes, bed details, or care context")
             self.plant_privacy_menu = ctk.CTkOptionMenu(form, values=["private", "shared", "public"])
@@ -4690,7 +4861,7 @@ What should evolve next
             ctk.CTkLabel(right, text="Plant Passports", font=ctk.CTkFont(size=20, weight="bold")).grid(
                 row=0, column=0, padx=18, pady=(18, 10), sticky="w"
             )
-            self.plants_text = self._make_textbox(right)
+            self.plants_text = ctk.CTkTextbox(right)
             self.plants_text.grid(row=1, column=0, padx=18, pady=(0, 16), sticky="nsew")
 
             self.care_picker = ctk.CTkOptionMenu(right, variable=self.care_plant_var, values=["No plants yet"])
@@ -4700,7 +4871,7 @@ What should evolve next
             ctk.CTkButton(right, text="Generate Care Brief", command=self.on_care_brief).grid(
                 row=4, column=0, padx=18, pady=(6, 10), sticky="new"
             )
-            self.care_text = self._make_textbox(right, height=180)
+            self.care_text = ctk.CTkTextbox(right, height=180)
             self.care_text.grid(row=5, column=0, padx=18, pady=(0, 18), sticky="nsew")
 
         def _build_observe_tab(self, tab: Any) -> None:
@@ -4725,7 +4896,7 @@ What should evolve next
             self.observe_tags_entry.grid(row=4, column=0, padx=18, pady=6, sticky="ew")
             self.observe_privacy_menu = ctk.CTkOptionMenu(form, values=["private", "shared", "public"])
             self.observe_privacy_menu.grid(row=5, column=0, padx=18, pady=6, sticky="ew")
-            self.observe_note_box = self._make_textbox(form, height=220)
+            self.observe_note_box = ctk.CTkTextbox(form, height=220)
             self.observe_note_box.grid(row=6, column=0, padx=18, pady=6, sticky="ew")
             self.observe_note_box.insert("1.0", "Describe what you see in the plant image or in person.")
             ctk.CTkButton(form, text="Choose Plant Image", command=self.on_pick_image).grid(
@@ -4745,7 +4916,7 @@ What should evolve next
             ctk.CTkLabel(right, text="Published Observation", font=ctk.CTkFont(size=20, weight="bold")).grid(
                 row=0, column=0, padx=18, pady=(18, 10), sticky="w"
             )
-            self.observe_result = self._make_textbox(right)
+            self.observe_result = ctk.CTkTextbox(right)
             self.observe_result.grid(row=1, column=0, padx=18, pady=(0, 18), sticky="nsew")
 
         def _build_guide_tab(self, tab: Any) -> None:
@@ -4784,7 +4955,7 @@ What should evolve next
             ctk.CTkLabel(right, text="Guide Response", font=ctk.CTkFont(size=20, weight="bold")).grid(
                 row=0, column=0, padx=18, pady=(18, 10), sticky="w"
             )
-            self.guide_result = self._make_textbox(right)
+            self.guide_result = ctk.CTkTextbox(right)
             self.guide_result.grid(row=1, column=0, padx=18, pady=(0, 18), sticky="nsew")
 
         def _build_care_lab_tab(self, tab: Any) -> None:
@@ -4814,7 +4985,7 @@ What should evolve next
             ctk.CTkButton(left, text="Run Problem Diagnosis", command=self.on_diagnose_problem).grid(
                 row=6, column=0, padx=18, pady=(8, 16), sticky="ew"
             )
-            self.checkin_note_box = self._make_textbox(left, height=140)
+            self.checkin_note_box = ctk.CTkTextbox(left, height=140)
             self.checkin_note_box.grid(row=7, column=0, padx=18, pady=6, sticky="ew")
             self.checkin_note_box.insert("1.0", "Short health check-in note: growth, moisture, pests, recovery, stress, flowering, etc.")
             ctk.CTkButton(left, text="Save Health Check-In", command=self.on_record_health_checkin).grid(
@@ -4840,7 +5011,7 @@ What should evolve next
             self.technique_summary_box = ctk.CTkTextbox(right, height=120)
             self.technique_summary_box.grid(row=5, column=0, padx=18, pady=6, sticky="ew")
             self.technique_summary_box.insert("1.0", "Describe the technique, when it helped, and any caveats.")
-            self.technique_steps_box = self._make_textbox(right, height=120)
+            self.technique_steps_box = ctk.CTkTextbox(right, height=120)
             self.technique_steps_box.grid(row=6, column=0, padx=18, pady=6, sticky="ew")
             self.technique_steps_box.insert("1.0", "One step per line")
             ctk.CTkButton(right, text="Publish Shared Technique", command=self.on_publish_technique).grid(
@@ -4867,7 +5038,7 @@ What should evolve next
             ctk.CTkLabel(left, text="Watchlist", font=ctk.CTkFont(size=18, weight="bold")).grid(
                 row=2, column=0, padx=18, pady=(0, 10), sticky="w"
             )
-            self.insights_watchlist = self._make_textbox(left)
+            self.insights_watchlist = ctk.CTkTextbox(left)
             self.insights_watchlist.grid(row=3, column=0, padx=18, pady=(0, 18), sticky="nsew")
 
             right = ctk.CTkFrame(tab)
@@ -4877,7 +5048,7 @@ What should evolve next
             ctk.CTkLabel(right, text="Activity Timeline", font=ctk.CTkFont(size=20, weight="bold")).grid(
                 row=0, column=0, padx=18, pady=(18, 10), sticky="w"
             )
-            self.insights_activity = self._make_textbox(right)
+            self.insights_activity = ctk.CTkTextbox(right)
             self.insights_activity.grid(row=1, column=0, padx=18, pady=(0, 18), sticky="nsew")
 
         def _build_community_tab(self, tab: Any) -> None:
@@ -4921,7 +5092,7 @@ What should evolve next
             )
             self.community_group_name_entry = ctk.CTkEntry(right, placeholder_text="Pin group name")
             self.community_group_name_entry.grid(row=1, column=0, padx=18, pady=6, sticky="ew")
-            self.community_group_description_box = self._make_textbox(right, height=90)
+            self.community_group_description_box = ctk.CTkTextbox(right, height=90)
             self.community_group_description_box.grid(row=2, column=0, padx=18, pady=6, sticky="ew")
             self.community_group_description_box.insert("1.0", "Describe the group purpose, plant types, or pin behavior.")
             self.community_group_privacy_menu = ctk.CTkOptionMenu(right, values=["private", "shared", "public"])
@@ -5078,13 +5249,20 @@ What should evolve next
             ctk.CTkButton(buttons, text="Refresh Model Status", command=self.refresh_all).grid(row=0, column=0, padx=(0, 8), sticky="ew")
             ctk.CTkButton(buttons, text="Verify Model Hash", command=self.on_verify_model).grid(row=0, column=1, padx=(8, 0), sticky="ew")
 
-            self.models_text = self._make_textbox(tab)
+            self.models_text = ctk.CTkTextbox(tab)
             self.models_text.grid(row=1, column=0, padx=18, pady=(0, 18), sticky="nsew")
 
         def _set_text(self, widget: Any, text: str) -> None:
             textbox = getattr(widget, "_textbox", None)
             if textbox is not None:
-                textbox.configure(wrap="word")
+                try:
+                    textbox.configure(wrap="word")
+                except Exception:
+                    pass
+            try:
+                widget.configure(state="normal")
+            except Exception:
+                pass
             widget.delete("1.0", "end")
             widget.insert("1.0", text)
 
@@ -5108,6 +5286,22 @@ What should evolve next
         def _handle_error(self, exc: Exception) -> None:
             self.status_var.set("Action failed. See dialog for details.")
             messagebox.showerror("Kayla's Garden", str(exc))
+
+        def _protocol_readiness_score(self, summary: Mapping[str, Any]) -> int:
+            score = 0
+            if getattr(self.runtime, "identity", None):
+                score += 1
+            if summary.get("model_status", {}).get("installed"):
+                score += 1
+            if summary.get("model_status", {}).get("litert_installed"):
+                score += 1
+            if (self.runtime.settings.get("ipfs_api") or "").strip():
+                score += 1
+            if (self.runtime.settings.get("hive_api") or "").strip():
+                score += 1
+            if (self.runtime.settings.get("network_mode") or "") == "local-first":
+                score += 1
+            return score
 
         def refresh_all(self) -> None:
             self.runtime.state = self.runtime.vault.load(password=self.runtime.password)
@@ -5139,8 +5333,9 @@ What should evolve next
                     f"Model present: {summary['model_status']['installed']}"
                 ),
             )
-            self._set_text(self.dashboard_summary, json.dumps(summary, indent=2, ensure_ascii=True))
+            self._set_text(self.dashboard_summary, self._dashboard_overview_text(summary))
             self._set_text(self.dashboard_queue, self._queue_text())
+            self._set_text(self.dashboard_protocol, self._generate_protocol_readout_text())
             self._set_text(self.plants_text, self._plants_text())
             self._set_text(self.network_queue, json.dumps(self.runtime.network_status(), indent=2, ensure_ascii=True))
             self._set_text(self.daemon_status_text, json.dumps(self.runtime.ipfs_daemon_status(), indent=2, ensure_ascii=True))
@@ -5157,13 +5352,40 @@ What should evolve next
                     ensure_ascii=True,
                 ),
             )
-            if hasattr(self, "system_check_text"):
-                self._set_text(self.system_check_text, self._generate_system_check_text(summary))
-            if hasattr(self, "system_concept_text"):
-                self._set_text(self.system_concept_text, self._generate_concept_status_text(summary))
+            self._set_text(self.start_hive_text, self._generate_hive_notes_text())
+            self._set_text(self.start_next_steps_text, self._generate_next_steps_text())
+            self._set_text(self.system_check_text, self._generate_system_check_report())
+            self._set_text(self.protocol_readiness_text, self._generate_protocol_readiness_text())
+            self._set_text(self.audit_surface_text, self._generate_audit_surface_text())
+            self._set_text(self.validation_pipeline_text, self._generate_validation_pipeline_text())
+            self._set_text(self.validation_consensus_text, self._generate_consensus_ladder_text())
+            self._set_text(self.validation_risk_text, self._generate_risk_simulation_text())
+            self._set_text(self.validation_registry_text, self._generate_registry_design_text())
             self._sync_settings_fields()
             self._sync_plant_menus()
             self.status_var.set("Garden runtime refreshed.")
+
+        def _dashboard_overview_text(self, summary: Mapping[str, Any]) -> str:
+            model = summary.get("model_status") or {}
+            network = summary.get("network_status") or {}
+            mode = network.get("mode") or {}
+            daemon = network.get("ipfs_daemon") or {}
+            plants = summary.get("plants") or []
+            latest_names = ", ".join([sanitize_text((plant.get("name") if isinstance(plant, dict) else str(plant)) or "", max_chars=40) for plant in plants[:5] if plant]) or "No plants yet"
+            return (
+                "Garden overview:\n"
+                f"- Plants tracked: {len(plants)}\n"
+                f"- Recent plants: {latest_names}\n"
+                f"- Network mode: {mode.get('network_mode')}\n"
+                f"- Anchor queue depth: {summary.get('anchor_queue_depth')}\n"
+                f"- Sync queue depth: {summary.get('sync_queue_depth')}\n"
+                f"- Managed IPFS running: {daemon.get('running')}\n"
+                f"- LiteRT installed: {model.get('litert_installed')}\n"
+                f"- Model present: {model.get('installed')}\n"
+                f"- Diagnoses logged: {summary.get('diagnosis_count')}\n"
+                f"- Health check-ins: {summary.get('health_checkin_count')}\n\n"
+                "Use Dashboard for status, Workflow for lifecycle design, Protocol Lab for rule design, and Trust Lab for public governance ideas."
+            )
 
         def _queue_text(self) -> str:
             anchors = list(self.runtime.state.get("anchor_queue") or [])[-10:]
